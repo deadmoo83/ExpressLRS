@@ -1,4 +1,3 @@
-#include <cstdint>
 #include "stubborn_sender.h"
 
 StubbornSender::StubbornSender(uint8_t maxPackageIndex)

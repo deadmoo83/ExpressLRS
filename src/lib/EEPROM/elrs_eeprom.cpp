@@ -35,6 +35,7 @@ ELRS_EEPROM::Begin()
         /* Initialize EEPROM */
         EEPROM.begin(extEEPROM::twiClock100kHz, &Wire);
     #endif // STM32_USE_FLASH
+#elif defined(PLATFORM_ATMELAVR)
 #else /* !PLATFORM_STM32 */
     EEPROM.begin(RESERVED_EEPROM_SIZE);
 #endif /* PLATFORM_STM32 */

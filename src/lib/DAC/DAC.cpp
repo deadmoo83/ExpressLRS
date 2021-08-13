@@ -12,7 +12,7 @@ typedef struct {
     uint16_t volts; // APC2volts*1000
 } dac_lut_s;
 
-dac_lut_s LUT[] =
+const dac_lut_s PROGMEM LUT[] =
 {
 #if defined(TARGET_R9M_TX)
 #if defined(Regulatory_Domain_EU_868)

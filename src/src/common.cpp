@@ -5,13 +5,13 @@
 #include "SX127xDriver.h"
 extern SX127xDriver Radio;
 
-expresslrs_mod_settings_s ExpressLRS_AirRateConfig[RATE_MAX] = {
+const expresslrs_mod_settings_s PROGMEM ExpressLRS_AirRateConfig[RATE_MAX] = {
     {0, RATE_200HZ, SX127x_BW_500_00_KHZ, SX127x_SF_6, SX127x_CR_4_7, 5000, TLM_RATIO_1_64, 4, 8, 8},
     {1, RATE_100HZ, SX127x_BW_500_00_KHZ, SX127x_SF_7, SX127x_CR_4_7, 10000, TLM_RATIO_1_64, 4, 8, 8},
     {2, RATE_50HZ, SX127x_BW_500_00_KHZ, SX127x_SF_8, SX127x_CR_4_7, 20000, TLM_RATIO_NO_TLM, 4, 10, 8},
     {3, RATE_25HZ, SX127x_BW_500_00_KHZ, SX127x_SF_9, SX127x_CR_4_7, 40000, TLM_RATIO_NO_TLM, 4, 10, 8}};
 
-expresslrs_rf_pref_params_s ExpressLRS_AirRateRFperf[RATE_MAX] = {
+const expresslrs_rf_pref_params_s PROGMEM ExpressLRS_AirRateRFperf[RATE_MAX] = {
     {0, RATE_200HZ, -112, 4380, 3000, 2500, 2000, 4000},
     {1, RATE_100HZ, -117, 8770, 3500, 2500, 2000, 4000},
     {2, RATE_50HZ, -120, 17540, 4000, 2500, 2000, 4000},

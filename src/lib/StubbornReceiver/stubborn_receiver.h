@@ -1,6 +1,10 @@
 #pragma once
 
+#ifdef PLATFORM_ATMELAVR
+#include <stdint.h>
+#else
 #include <cstdint>
+#endif
 
 class StubbornReceiver
 {

@@ -1,6 +1,10 @@
 #pragma once
 
+#ifdef PLATFORM_ATMELAVR
+#include <stdint.h>
+#else
 #include <cstdint>
+#endif
 
 // The number of times to resend the same package index before going to RESYNC
 #define SSENDER_MAX_MISSED_PACKETS 20

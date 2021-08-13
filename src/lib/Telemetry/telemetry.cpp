@@ -1,5 +1,8 @@
-#include <cstdint>
+#ifdef PLATFORM_ATMELAVR
+#include <string.h>
+#else
 #include <cstring>
+#endif
 #include "telemetry.h"
 
 #if defined(UNIT_TEST)

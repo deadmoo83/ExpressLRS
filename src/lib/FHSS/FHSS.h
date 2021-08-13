@@ -33,16 +33,17 @@ extern int32_t FreqCorrection;
 #define FreqCorrectionMax ((int32_t)(100000/FREQ_STEP))
 #define FreqCorrectionMin ((int32_t)(-100000/FREQ_STEP))
 
-#define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((double)freq/(double)FREQ_STEP))
+//#define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((double)freq/(double)FREQ_STEP))
+#define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((uint32_t)freq/(uint32_t)FREQ_STEP))
 
 // Our table of FHSS frequencies. Define a regulatory domain to select the correct set for your location and radio
 #ifdef Regulatory_Domain_AU_433
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(433420000),
     FREQ_HZ_TO_REG_VAL(433920000),
     FREQ_HZ_TO_REG_VAL(434420000)};
 #elif defined Regulatory_Domain_AU_915
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(915500000),
     FREQ_HZ_TO_REG_VAL(916100000),
     FREQ_HZ_TO_REG_VAL(916700000),
@@ -76,7 +77,7 @@ const uint32_t FHSSfreqs[] = {
  * Therefore we simply maximize the usage of available spectrum so laboratory testing of the software won't disturb existing
  * 868MHz ISM band traffic too much.
  */
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(863275000), // band H1, 863 - 865MHz, 0.1% duty cycle or CSMA techniques, 25mW EIRP
     FREQ_HZ_TO_REG_VAL(863800000),
     FREQ_HZ_TO_REG_VAL(864325000),
@@ -98,7 +99,7 @@ const uint32_t FHSSfreqs[] = {
  * There is currently no mention of Direct-sequence spread spectrum,
  * So these frequencies are a subset of Regulatory_Domain_EU_868 frequencies.
  */
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(865375000),
     FREQ_HZ_TO_REG_VAL(865900000),
     FREQ_HZ_TO_REG_VAL(866425000),
@@ -108,14 +109,14 @@ const uint32_t FHSSfreqs[] = {
  * Note: As is the case with the 868Mhz band, these frequencies only comply to the license free portion
  * of the spectrum, nothing else. As such, these are likely illegal to use.
  */
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(433100000),
     FREQ_HZ_TO_REG_VAL(433925000),
     FREQ_HZ_TO_REG_VAL(434450000)};
 #elif defined Regulatory_Domain_FCC_915
 /* Very definitely not fully checked. An initial pass at increasing the hops
 */
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(903500000),
     FREQ_HZ_TO_REG_VAL(904100000),
     FREQ_HZ_TO_REG_VAL(904700000),
@@ -166,7 +167,7 @@ const uint32_t FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(926300000),
     FREQ_HZ_TO_REG_VAL(926900000)};
 #elif Regulatory_Domain_ISM_2400
-const uint32_t FHSSfreqs[] = {
+const uint32_t PROGMEM FHSSfreqs[] = {
     FREQ_HZ_TO_REG_VAL(2400400000),
     FREQ_HZ_TO_REG_VAL(2401400000),
     FREQ_HZ_TO_REG_VAL(2402400000),

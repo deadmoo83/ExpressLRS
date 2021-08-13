@@ -204,7 +204,8 @@ void ICACHE_RAM_ATTR SX127xDriver::SetFrequencyHz(uint32_t freq)
   currFreq = freq;
   SetMode(SX127x_OPMODE_STANDBY);
 
-  int32_t FRQ = ((uint32_t)((double)freq / (double)FREQ_STEP));
+  //int32_t FRQ = ((uint32_t)((double)freq / (double)FREQ_STEP));
+  int32_t FRQ = ((uint32_t)((uint32_t)freq / (uint32_t)FREQ_STEP));
 
   uint8_t FRQ_MSB = (uint8_t)((FRQ >> 16) & 0xFF);
   uint8_t FRQ_MID = (uint8_t)((FRQ >> 8) & 0xFF);
@@ -248,7 +249,7 @@ bool SX127xDriver::DetectChip()
       Serial.print(" of 3 tries) REG_VERSION == ");
 
       char buffHex[5];
-      sprintf(buffHex, "0x%02X", version);
+      //sprintf(buffHex, "0x%02X", version);
       Serial.print(buffHex);
       Serial.println();
       delay(200);

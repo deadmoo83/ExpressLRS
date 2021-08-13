@@ -10,3 +10,7 @@
 #ifdef PLATFORM_STM32
 #include "STM32_hwTimer.h"
 #endif
+
+#ifdef PLATFORM_ATMELAVR
+#include "ATMELAVR_hwTimer.h"
+#endif

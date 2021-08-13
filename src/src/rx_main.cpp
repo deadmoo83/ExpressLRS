@@ -88,6 +88,8 @@ CRSF crsf(CRSF_TX_SERIAL);
     HardwareSerial CrsfRxSerial(USART3);
 #elif defined(TARGET_RX_FM30_MINI)
     #define CRSF_RX_SERIAL CRSF_TX_SERIAL
+#elif defined(TARGET_RX_LORA32u24II)
+    #define CRSF_RX_SERIAL Serial1
 #else
     #define CRSF_RX_SERIAL Serial
 #endif
@@ -879,6 +881,11 @@ static void setupSerial()
     Serial.begin(CRSF_RX_BAUDRATE); // Same baud as CRSF for simplicity
 #endif
 
+#if defined(PLATFORM_ATMELAVR)
+    CRSF_RX_SERIAL.begin(CRSF_OPENTX_SLOW_BAUDRATE);
+    CRSF_TX_SERIAL.begin(CRSF_OPENTX_SLOW_BAUDRATE);
+#endif
+
 #if defined(PLATFORM_ESP8266)
     Serial.begin(CRSF_RX_BAUDRATE);
 #endif
@@ -1135,6 +1142,8 @@ static void cycleRfMode()
 
 void setup()
 {
+    while (!Serial)
+    
     setupGpio();
     // serial setup must be done before anything as some libs write
     // to the serial port and they'll block if the buffer fills
@@ -1181,6 +1190,8 @@ void setup()
 
 void loop()
 {
+    return;
+
     HandleUARTin();
     if (hwTimer.running == false)
     {

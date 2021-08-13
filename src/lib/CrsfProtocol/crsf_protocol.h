@@ -1,8 +1,11 @@
 #pragma once
 
+#include <avr/pgmspace.h>
+
+#ifndef PLATFORM_ATMELAVR
 #include <cstdint>
 #include <cmath>
-
+#endif
 
 #if TARGET_TX && PLATFORM_STM32
 #define CRSF_TX_MODULE_STM32 1
@@ -71,7 +74,7 @@
 #define CRSF_MSP_MAX_PAYLOAD_SIZE (CRSF_MSP_REQ_PAYLOAD_SIZE > CRSF_MSP_RESP_PAYLOAD_SIZE ? CRSF_MSP_REQ_PAYLOAD_SIZE : CRSF_MSP_RESP_PAYLOAD_SIZE)
 
 /* CRC8 implementation with polynom = x​7​+ x​6​+ x​4​+ x​2​+ x​0 ​(0xD5) */
-static const unsigned char crc8tab[256] = {
+static const unsigned char crc8tab[256] PROGMEM = {
     0x00, 0xD5, 0x7F, 0xAA, 0xFE, 0x2B, 0x81, 0x54, 0x29, 0xFC, 0x56, 0x83, 0xD7, 0x02, 0xA8, 0x7D,
     0x52, 0x87, 0x2D, 0xF8, 0xAC, 0x79, 0xD3, 0x06, 0x7B, 0xAE, 0x04, 0xD1, 0x85, 0x50, 0xFA, 0x2F,
     0xA4, 0x71, 0xDB, 0x0E, 0x5A, 0x8F, 0x25, 0xF0, 0x8D, 0x58, 0xF2, 0x27, 0x73, 0xA6, 0x0C, 0xD9,
@@ -89,7 +92,7 @@ static const unsigned char crc8tab[256] = {
     0xD6, 0x03, 0xA9, 0x7C, 0x28, 0xFD, 0x57, 0x82, 0xFF, 0x2A, 0x80, 0x55, 0x01, 0xD4, 0x7E, 0xAB,
     0x84, 0x51, 0xFB, 0x2E, 0x7A, 0xAF, 0x05, 0xD0, 0xAD, 0x78, 0xD2, 0x07, 0x53, 0x86, 0x2C, 0xF9};
 
-static const unsigned int VTXtable[6][8] =
+static const unsigned int VTXtable[6][8] PROGMEM =
     {{5865, 5845, 5825, 5805, 5785, 5765, 5745, 5725},  /* Band A */
      {5733, 5752, 5771, 5790, 5809, 5828, 5847, 5866},  /* Band B */
      {5705, 5685, 5665, 5645, 5885, 5905, 5925, 5945},  /* Band E */
@@ -340,12 +343,12 @@ struct tagLuaInt16Properties{
     int16_t max;
     int16_t defaultValue;
 }PACKED;
-struct tagLuaFloatProperties{
+/*struct tagLuaFloatProperties{
     float value;
     float min;
     float max;
     float defaultValue;
-}PACKED;
+}PACKED;*/
 
 struct tagLuaDevice {
     const char *label1; //device name
@@ -396,13 +399,13 @@ struct tagLuaItem_int16 {
     const char *label2; //param unit
     uint8_t size;
 } PACKED;
-struct tagLuaItem_float {
+/*struct tagLuaItem_float {
     struct tagLuaProperties1 luaProperties1;
     const char *label1; //param name
     struct tagLuaFloatProperties luaProperties2;
     const char *label2;//param unit
     uint8_t size;
-} PACKED;
+} PACKED;*/
 struct tagLuaItem_string {
     struct tagLuaProperties1 luaProperties1;
     const char *label1; //param name

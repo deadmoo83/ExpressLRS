@@ -14,6 +14,8 @@
 
 #ifdef PLATFORM_STM32
 #define ICACHE_RAM_ATTR //nothing//
+#elif defined(PLATFORM_ATMELAVR)
+#define ICACHE_RAM_ATTR //nothing//
 #else
 #undef ICACHE_RAM_ATTR //fix to allow both esp32 and esp8266 to use ICACHE_RAM_ATTR for mapping to IRAM
 #define ICACHE_RAM_ATTR IRAM_ATTR
@@ -589,6 +591,17 @@ Designed by NamimnoRC
 #define GPIO_PIN_RST            2
 #define GPIO_PIN_LED            16
 #define GPIO_PIN_BUTTON         0
+
+#elif defined(TARGET_RX_LORA32u4II)
+#define GPIO_PIN_NSS            8
+#define GPIO_PIN_DIO0           7
+#define GPIO_PIN_DIO1           -1
+#define GPIO_PIN_MOSI           16
+#define GPIO_PIN_MISO           14
+#define GPIO_PIN_SCK            15
+#define GPIO_PIN_RST            4
+#define GPIO_PIN_LED            -1
+#define GPIO_PIN_BUTTON         -1
 
 #else
 #error "Unknown target!"

@@ -208,7 +208,8 @@ void ICACHE_RAM_ATTR SX1280Driver::SetFrequencyHz(uint32_t Reqfreq)
 {
     WORD_ALIGNED_ATTR uint8_t buf[3] = {0};
 
-    uint32_t freq = (uint32_t)((double)Reqfreq / (double)FREQ_STEP);
+    //uint32_t freq = (uint32_t)((double)Reqfreq / (double)FREQ_STEP);
+    uint32_t freq = (uint32_t)((uint32_t)Reqfreq / (uint32_t)FREQ_STEP);
     buf[0] = (uint8_t)((freq >> 16) & 0xFF);
     buf[1] = (uint8_t)((freq >> 8) & 0xFF);
     buf[2] = (uint8_t)(freq & 0xFF);
@@ -233,7 +234,8 @@ int32_t ICACHE_RAM_ATTR SX1280Driver::GetFrequencyError()
 {
     WORD_ALIGNED_ATTR uint8_t efeRaw[3] = {0};
     uint32_t efe = 0;
-    double efeHz = 0.0;
+    //double efeHz = 0.0;
+    uint32_t efeHz = 0;
 
     efeRaw[0] = hal.ReadRegister(SX1280_REG_LR_ESTIMATED_FREQUENCY_ERROR_MSB);
     efeRaw[1] = hal.ReadRegister(SX1280_REG_LR_ESTIMATED_FREQUENCY_ERROR_MSB + 1);
