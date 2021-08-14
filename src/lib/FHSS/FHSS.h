@@ -33,8 +33,7 @@ extern int32_t FreqCorrection;
 #define FreqCorrectionMax ((int32_t)(100000/FREQ_STEP))
 #define FreqCorrectionMin ((int32_t)(-100000/FREQ_STEP))
 
-//#define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((double)freq/(double)FREQ_STEP))
-#define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((uint32_t)freq/(uint32_t)FREQ_STEP))
+#define FREQ_HZ_TO_REG_VAL(freq) ((uint32_t)((float)freq/(float)FREQ_STEP))
 
 // Our table of FHSS frequencies. Define a regulatory domain to select the correct set for your location and radio
 #ifdef Regulatory_Domain_AU_433
