@@ -75,7 +75,7 @@ ELRS_EEPROM::WriteByte(const uint32_t address, const uint8_t value)
 void
 ELRS_EEPROM::Commit()
 {
-#if defined(PLATFORM_ESP32) || defined(PLATFORM_ESP8266)
+#if defined(PLATFORM_ESP32) || defined(PLATFORM_ESP8266) || defined(PLATFORM_ASR6501)
     if (!EEPROM.commit())
     {
       Serial.println("ERROR! EEPROM commit failed");

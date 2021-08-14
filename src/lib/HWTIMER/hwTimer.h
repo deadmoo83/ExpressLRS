@@ -10,3 +10,7 @@
 #ifdef PLATFORM_STM32
 #include "STM32_hwTimer.h"
 #endif
+
+#ifdef PLATFORM_ASR6501
+#include "ASR6501_hwTimer.h"
+#endif

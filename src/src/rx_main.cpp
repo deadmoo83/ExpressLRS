@@ -1,3 +1,4 @@
+
 #include "targets.h"
 #include "common.h"
 #include "LowPassFilter.h"
@@ -74,6 +75,8 @@ Telemetry telemetry;
 /* CRSF_TX_SERIAL is used by CRSF output */
 #if defined(TARGET_RX_FM30_MINI)
     HardwareSerial CRSF_TX_SERIAL(USART2);
+#elif defined(TARGET_RX_CUBECELL)
+    #define CRSF_TX_SERIAL Serial1
 #else
     #define CRSF_TX_SERIAL Serial
 #endif
@@ -88,6 +91,8 @@ CRSF crsf(CRSF_TX_SERIAL);
     HardwareSerial CrsfRxSerial(USART3);
 #elif defined(TARGET_RX_FM30_MINI)
     #define CRSF_RX_SERIAL CRSF_TX_SERIAL
+#elif defined(TARGET_RX_CUBECELL)
+    #define CRSF_RX_SERIAL Serial1
 #else
     #define CRSF_RX_SERIAL Serial
 #endif
@@ -211,8 +216,8 @@ void ICACHE_RAM_ATTR getRFlinkInfo()
     }
 
     int32_t rssiDBM = (antenna == 0) ? rssiDBM0 : rssiDBM1;
-    crsf.PackedRCdataOut.ch15 = UINT10_to_CRSF(map(constrain(rssiDBM, ExpressLRS_currAirRate_RFperfParams->RXsensitivity, -50),
-                                               ExpressLRS_currAirRate_RFperfParams->RXsensitivity, -50, 0, 1023));
+    crsf.PackedRCdataOut.ch15 = UINT10_to_CRSF(map((long)constrain(rssiDBM, ExpressLRS_currAirRate_RFperfParams->RXsensitivity, -50),
+                                               (long)ExpressLRS_currAirRate_RFperfParams->RXsensitivity, -50, 0, 1023));
     crsf.PackedRCdataOut.ch14 = UINT10_to_CRSF(fmap(uplinkLQ, 0, 100, 0, 1023));
 
     if (rssiDBM0 > 0) rssiDBM0 = 0;
@@ -878,6 +883,12 @@ static void setupSerial()
 #if defined(PLATFORM_ESP8266)
     Serial.begin(CRSF_RX_BAUDRATE);
 #endif
+
+#if defined(TARGET_RX_CUBECELL)
+    Serial.begin(CRSF_OPENTX_SLOW_BAUDRATE);
+    CRSF_TX_SERIAL.begin(CRSF_RX_BAUDRATE);
+#endif
+
 
 }
 

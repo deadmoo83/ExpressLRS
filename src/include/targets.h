@@ -12,7 +12,7 @@
 
 #define WORD_ALIGNED_ATTR __attribute__((aligned(4)))
 
-#ifdef PLATFORM_STM32
+#if defined(PLATFORM_STM32) || defined(PLATFORM_ASR6501)
 #define ICACHE_RAM_ATTR //nothing//
 #else
 #undef ICACHE_RAM_ATTR //fix to allow both esp32 and esp8266 to use ICACHE_RAM_ATTR for mapping to IRAM
@@ -589,6 +589,18 @@ Designed by NamimnoRC
 #define GPIO_PIN_RST            2
 #define GPIO_PIN_LED            16
 #define GPIO_PIN_BUTTON         0
+
+#elif defined(TARGET_RX_CUBECELL)
+#define GPIO_PIN_BUTTON         17
+#define GPIO_PIN_MOSI           P4_0
+#define GPIO_PIN_MISO           P4_1
+#define GPIO_PIN_SCK            P4_2
+#define GPIO_PIN_NSS            P4_3
+#define GPIO_PIN_DIO1           P4_6
+#define GPIO_PIN_RST            P5_7
+#define GPIO_PIN_DIO0           30
+#define GPIO_PIN_LED_WS2812     34
+#define GPIO_PIN_LED_WS2812_FAST 34
 
 #else
 #error "Unknown target!"
