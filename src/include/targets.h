@@ -598,8 +598,8 @@ Designed by NamimnoRC
 #define GPIO_PIN_MISO           14
 #define GPIO_PIN_SCK            15
 #define GPIO_PIN_RST            4
-#define GPIO_PIN_LED            -1
-#define GPIO_PIN_BUTTON         -1
+//#define GPIO_PIN_LED            -1
+//#define GPIO_PIN_BUTTON         -1
 
 #else
 #error "Unknown target!"
