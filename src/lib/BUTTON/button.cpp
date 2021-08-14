@@ -53,7 +53,7 @@ void button::sampleButton()
         { //button release
             if (buttonIsDown and (!buttonIsDownLong))
             {
-                Serial.println("button short pressed");
+                Serial.println(F("button short pressed"));
                 buttonShortPress();
                 buttonLastPressedShort = now;
                 shortPressTime++;
@@ -68,7 +68,7 @@ void button::sampleButton()
         { //button release
             if (buttonIsDown and (!buttonIsDownLong))
             {
-                Serial.println("button short pressed");
+                Serial.println(F("button short pressed"));
                 buttonShortPress();
                 buttonLastPressedShort = now;
                 shortPressTime++;
@@ -112,7 +112,7 @@ void button::sampleButton()
     {
         if (buttonIsDown)
         {
-            Serial.println("button pressed long");
+            Serial.println(F("button pressed long"));
             buttonLastPressedLong = now;
             buttonIsDownLong = true;
             buttonLongPress();
@@ -121,7 +121,7 @@ void button::sampleButton()
 
     if (shortPressTime == 3)
     {
-        Serial.println("button triple pressed");
+        Serial.println(F("button triple pressed"));
         buttonTriplePress();
         shortPressTime = 0;    
     }

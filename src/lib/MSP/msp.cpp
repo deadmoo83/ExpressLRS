@@ -113,9 +113,9 @@ MSP::processReceivedByte(uint8_t c)
                 m_inputState = MSP_COMMAND_RECEIVED;
             }
             else {
-                Serial.print("CRC failure on MSP packet - Got ");
+                Serial.print(F("CRC failure on MSP packet - Got "));
                 Serial.print(c);
-                Serial.print(" Expected ");
+                Serial.print(F(" Expected "));
                 Serial.println(m_crc);
                 m_inputState = MSP_IDLE;
             }

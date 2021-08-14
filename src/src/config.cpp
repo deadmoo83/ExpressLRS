@@ -12,7 +12,7 @@ TxConfig::Load()
     if (m_config.version != TX_CONFIG_VERSION)
     {
         // If not, revert to defaults for this version
-        Serial.println("EEPROM version mismatch! Resetting to defaults...");
+        Serial.println(F("EEPROM version mismatch! Resetting to defaults..."));
         SetDefaults();
     }
 
@@ -114,7 +114,7 @@ RxConfig::Load()
     if (m_config.version != RX_CONFIG_VERSION)
     {
         // If not, revert to defaults for this version
-        Serial.println("EEPROM version mismatch! Resetting to defaults...");
+        Serial.println(F("EEPROM version mismatch! Resetting to defaults..."));
         SetDefaults();
     }
 

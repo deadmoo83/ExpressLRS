@@ -349,7 +349,7 @@ void ICACHE_RAM_ATTR HandleFreqCorr(bool value)
             FreqCorrection = FreqCorrectionMax;
             FreqCorrection = 0; //reset because something went wrong
 #ifndef DEBUG_SUPPRESS
-            Serial.println("Max pos reasontable freq offset correction limit reached!");
+            Serial.println(F("Max pos reasontable freq offset correction limit reached!"));
 #endif
         }
     }
@@ -364,7 +364,7 @@ void ICACHE_RAM_ATTR HandleFreqCorr(bool value)
             FreqCorrection = FreqCorrectionMin;
             FreqCorrection = 0; //reset because something went wrong
 #ifndef DEBUG_SUPPRESS
-            Serial.println("Max neg reasontable freq offset correction limit reached!");
+            Serial.println(F("Max neg reasontable freq offset correction limit reached!"));
 #endif
         }
     }
@@ -588,7 +588,7 @@ void ICACHE_RAM_ATTR TentativeConnection()
     connectionStatePrev = connectionState;
     connectionState = tentative;
     RXtimerState = tim_disconnected;
-    Serial.println("tentative conn");
+    Serial.println(F("tentative conn"));
     FreqCorrection = 0;
     Offset = 0;
     prevOffset = 0;
@@ -623,7 +623,7 @@ void GotConnection()
     RXtimerState = tim_tentative;
     GotConnectionMillis = millis();
 
-    Serial.println("got conn");
+    Serial.println(F("got conn"));
 
 #if WS2812_LED_IS_USED
     uint8_t LEDcolor[3] = {0};
@@ -659,13 +659,13 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
     if (inCRC != calculatedCRC)
     {
         #ifndef DEBUG_SUPPRESS
-        Serial.print("CRC error on RF packet: ");
+        Serial.print(F("CRC error on RF packet: "));
         for (int i = 0; i < 8; i++)
         {
             Serial.print(Radio.RXdataBuffer[i], HEX);
-            Serial.print(",");
+            Serial.print(F(","));
         }
-        Serial.println("");
+        Serial.println(F(""));
         #endif
         #if defined(PRINT_RX_SCOREBOARD)
             lastPacketCrcError = true;
@@ -751,7 +751,7 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
              if (ExpressLRS_currAirRate_Modparams->TLMinterval != (expresslrs_tlm_ratio_e)TLMrateIn)
              { // change link parameters if required
 #ifndef DEBUG_SUPPRESS
-                 Serial.println("New TLMrate: ");
+                 Serial.println(F("New TLMrate: "));
                  Serial.println(TLMrateIn);
 #endif
                  ExpressLRS_currAirRate_Modparams->TLMinterval = (expresslrs_tlm_ratio_e)TLMrateIn;
@@ -949,14 +949,14 @@ static void setupBindingFromConfig()
     // Check the byte that indicates if RX has been bound
     if (config.GetIsBound())
     {
-        Serial.println("RX has been bound previously, reading the UID from eeprom...");
+        Serial.println(F("RX has been bound previously, reading the UID from eeprom..."));
         const uint8_t* storedUID = config.GetUID();
         for (uint8_t i = 0; i < UID_LEN; ++i)
         {
             UID[i] = storedUID[i];
         }
 
-        Serial.print("UID = ");
+        Serial.print(F("UID = "));
         Serial.print(UID[0]);
         Serial.print(", ");
         Serial.print(UID[1]);
@@ -1016,7 +1016,7 @@ static void setupRadio()
 #ifdef PLATFORM_ESP8266
     if (!init_success)
     {
-        Serial.println("Failed to detect RF chipset!!!");
+        Serial.println(F("Failed to detect RF chipset!!!"));
         beginWebsever();
         while (1)
         {
@@ -1032,7 +1032,7 @@ static void setupRadio()
         LED = !LED;
         #endif
         delay(LED_INTERVAL_ERROR);
-        Serial.println("Failed to detect RF chipset!!!");
+        Serial.println(F("Failed to detect RF chipset!!!"));
         HandleUARTin();
     }
 #endif
@@ -1093,7 +1093,7 @@ static void updateTelemetryBurst()
         --telemetryBurstMax;
     else
         telemetryBurstMax = 1;
-    //Serial.print("TLMburst:"); Serial.println(telemetryBurstMax, DEC);
+    //Serial.print(F("TLMburst:")); Serial.println(telemetryBurstMax, DEC);
 
     // Notify the sender to adjust its expected throughput
     TelemetrySender.UpdateTelemetryRate(hz, ratiodiv, telemetryBurstMax);
@@ -1151,17 +1151,17 @@ void setup()
     // Init EEPROM and load config, checking powerup count
     setupConfigAndPocCheck();
 
-    Serial.println("ExpressLRS Module Booting...");
+    Serial.println(F("ExpressLRS Module Booting..."));
 #if defined Regulatory_Domain_AU_915 || defined Regulatory_Domain_FCC_915
-    Serial.println("Setting 915MHz Mode");
+    Serial.println(F("Setting 915MHz Mode"));
 #elif defined Regulatory_Domain_EU_868
-    Serial.println("Setting 868MHz Mode");
+    Serial.println(F("Setting 868MHz Mode"));
 #elif defined Regulatory_Domain_IN_866
-    Serial.println("Setting 866MHz Mode");
+    Serial.println(F("Setting 866MHz Mode"));
 #elif defined Regulatory_Domain_AU_433 || defined Regulatory_Domain_EU_433
-    Serial.println("Setting 433MHz Mode");
+    Serial.println(F("Setting 433MHz Mode"));
 #elif defined Regulatory_Domain_ISM_2400
-    Serial.println("Setting 2.4GHz Mode");
+    Serial.println(F("Setting 2.4GHz Mode"));
 #endif
 
     wifiOff();
@@ -1174,9 +1174,9 @@ void setup()
     setupRadio();
 
     // RFnoiseFloor = MeasureNoiseFloor(); //TODO move MeasureNoiseFloor to driver libs
-    // Serial.print("RF noise floor: ");
+    // Serial.print(F("RF noise floor: "));
     // Serial.print(RFnoiseFloor);
-    // Serial.println("dBm");
+    // Serial.println(F("dBm"));
 
     hwTimer.callbackTock = &HWtimerCallbackTock;
     hwTimer.callbackTick = &HWtimerCallbackTick;
@@ -1190,7 +1190,7 @@ void setup()
 
 void loop()
 {
-    return;
+    //return;
 
     HandleUARTin();
     if (hwTimer.running == false)
@@ -1220,7 +1220,7 @@ void loop()
         LostConnection();
         LastSyncPacket = millis();           // reset this variable to stop rf mode switching and add extra time
         RFmodeLastCycled = millis();         // reset this variable to stop rf mode switching and add extra time
-        Serial.println("Air rate change req via sync");
+        Serial.println(F("Air rate change req via sync"));
         crsf.sendLinkStatisticsToFC();
         crsf.sendLinkStatisticsToFC(); // need to send twice, not sure why, seems like a BF bug?
     }
@@ -1228,7 +1228,7 @@ void loop()
     if (connectionState == tentative && (millis() - LastSyncPacket > ExpressLRS_currAirRate_RFperfParams->RFmodeCycleAddtionalTime))
     {
         LostConnection();
-        Serial.println("Bad sync, aborting");
+        Serial.println(F("Bad sync, aborting"));
         RFmodeLastCycled = millis();
         LastSyncPacket = millis();
     }
@@ -1269,7 +1269,7 @@ void loop()
     {
         RXtimerState = tim_locked;
         #ifndef DEBUG_SUPPRESS
-        Serial.println("Timer Considered Locked");
+        Serial.println(F("Timer Considered Locked"));
         #endif
     }
 
@@ -1293,7 +1293,7 @@ void loop()
     // and we're not already in binding mode, enter binding
     if (!config.GetIsBound() && !InBindingMode)
     {
-        Serial.println("RX has not been bound, enter binding mode...");
+        Serial.println(F("RX has not been bound, enter binding mode..."));
         EnterBindingMode();
     }
 
@@ -1367,7 +1367,7 @@ void reset_into_bootloader(void)
     CRSF_TX_SERIAL.flush();
 #if defined(PLATFORM_STM32)
     delay(100);
-    Serial.println("Jumping to Bootloader...");
+    Serial.println(F("Jumping to Bootloader..."));
     delay(100);
 
     /** Write command for firmware update.
@@ -1394,7 +1394,7 @@ void EnterBindingMode()
         // Don't enter binding if:
         // - we're already connected
         // - we're already binding
-        Serial.println("Cannot enter binding mode!");
+        Serial.println(F("Cannot enter binding mode!"));
         return;
     }
     if (webUpdateMode) {
@@ -1427,7 +1427,7 @@ void EnterBindingMode()
     // If the Radio Params (including InvertIQ) parameter changed, need to restart RX to take effect
     Radio.RXnb();
 
-    Serial.print("Entered binding mode at freq = ");
+    Serial.print(F("Entered binding mode at freq = "));
     Serial.println(Radio.currFreq);
 }
 
@@ -1435,7 +1435,7 @@ void ExitBindingMode()
 {
     if (!InBindingMode) {
         // Not in binding mode
-        Serial.println("Cannot exit binding mode, not in binding mode!");
+        Serial.println(F("Cannot exit binding mode, not in binding mode!"));
         return;
     }
 
@@ -1459,7 +1459,7 @@ void OnELRSBindMSP(uint8_t* packet)
 
     CRCInitializer = (UID[4] << 8) | UID[5];
 
-    Serial.print("New UID = ");
+    Serial.print(F("New UID = "));
     Serial.print(UID[0]);
     Serial.print(", ");
     Serial.print(UID[1]);

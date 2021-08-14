@@ -52,9 +52,9 @@ bool SX1280Driver::Begin()
     hal.RXdoneCallback = &SX1280Driver::RXnbISR;
 
     hal.reset();
-    Serial.println("SX1280 Begin");
+    Serial.println(F("SX1280 Begin"));
     delay(100);
-    Serial.print("Read Vers: ");
+    Serial.print(F("Read Vers: "));
     uint16_t firmwareRev = (((hal.ReadRegister(REG_LR_FIRMWARE_VERSION_MSB)) << 8) | (hal.ReadRegister(REG_LR_FIRMWARE_VERSION_MSB + 1)));
     Serial.println(firmwareRev);
     if ((firmwareRev == 0) || (firmwareRev == 65535))
@@ -92,7 +92,7 @@ void SX1280Driver::SetOutputPower(int8_t power)
     else if (13 < power) power = 13;
     uint8_t buf[2] = {(uint8_t)(power + 18), (uint8_t)SX1280_RADIO_RAMP_04_US};
     hal.WriteCommand(SX1280_RADIO_SET_TXPARAMS, buf, sizeof(buf));
-    Serial.print("SetPower: ");
+    Serial.print(F("SetPower: "));
     Serial.println(buf[0]);
     return;
 }
@@ -290,7 +290,7 @@ void ICACHE_RAM_ATTR SX1280Driver::TXnbISR()
     instance->ClearIrqStatus(SX1280_IRQ_RADIO_ALL);
 
 #ifdef DEBUG_SX1280_OTA_TIMING
-    Serial.print("TOA: ");
+    Serial.print(F("TOA: "));
     Serial.println(endTX - beginTX);
 #endif
     //instance->GetStatus();
@@ -303,7 +303,7 @@ void ICACHE_RAM_ATTR SX1280Driver::TXnb()
 {
     if (instance->currOpmode == SX1280_MODE_TX) //catch TX timeout
     {
-        //Serial.println("Timeout!");
+        //Serial.println(F("Timeout!"));
         instance->ClearIrqStatus(SX1280_IRQ_RADIO_ALL);
         instance->SetMode(SX1280_MODE_FS);
         TXnbISR();
@@ -354,11 +354,11 @@ void ICACHE_RAM_ATTR SX1280Driver::GetStatus()
     stat1 = (0b11100000 & status) >> 5;
     stat2 = (0b00011100 & status) >> 2;
     busy = 0b00000001 & status;
-    Serial.print("Status: ");
+    Serial.print(F("Status: "));
     Serial.print(stat1, HEX);
-    Serial.print(", ");
+    Serial.print(F(", "));
     Serial.print(stat2, HEX);
-    Serial.print(", ");
+    Serial.print(F(", "));
     Serial.println(busy, HEX);
 }
 

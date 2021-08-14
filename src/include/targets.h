@@ -12,9 +12,7 @@
 
 #define WORD_ALIGNED_ATTR __attribute__((aligned(4)))
 
-#ifdef PLATFORM_STM32
-#define ICACHE_RAM_ATTR //nothing//
-#elif defined(PLATFORM_ATMELAVR)
+#if defined(PLATFORM_STM32) || defined(PLATFORM_ATMELAVR)
 #define ICACHE_RAM_ATTR //nothing//
 #else
 #undef ICACHE_RAM_ATTR //fix to allow both esp32 and esp8266 to use ICACHE_RAM_ATTR for mapping to IRAM

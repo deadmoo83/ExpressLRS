@@ -23,24 +23,24 @@ void SX127xHal::end()
 
 void SX127xHal::init()
 {
-  Serial.println("Hal Init");
+  Serial.println(F("Hal Init"));
 
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
-    Serial.print("Use PA ctrl pin: ");
+    Serial.print(F("Use PA ctrl pin: "));
     Serial.println(GPIO_PIN_PA_ENABLE);
     pinMode(GPIO_PIN_PA_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_TX_ENABLE) && (GPIO_PIN_TX_ENABLE != UNDEF_PIN)
-    Serial.print("Use TX pin: ");
+    Serial.print(F("Use TX pin: "));
     Serial.println(GPIO_PIN_TX_ENABLE);
     pinMode(GPIO_PIN_TX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_TX_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
-    Serial.print("Use RX pin: ");
+    Serial.print(F("Use RX pin: "));
     Serial.println(GPIO_PIN_RX_ENABLE);
     pinMode(GPIO_PIN_RX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_RX_ENABLE, LOW);

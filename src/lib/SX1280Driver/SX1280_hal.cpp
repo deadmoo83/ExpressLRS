@@ -41,7 +41,7 @@ void SX1280Hal::end()
 
 void SX1280Hal::init()
 {
-    Serial.println("Hal Init");
+    Serial.println(F("Hal Init"));
 #if defined(GPIO_PIN_BUSY) && (GPIO_PIN_BUSY != UNDEF_PIN)
     pinMode(GPIO_PIN_BUSY, INPUT);
 #endif
@@ -51,28 +51,28 @@ void SX1280Hal::init()
     digitalWrite(GPIO_PIN_NSS, HIGH);
 
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
-    Serial.print("Use PA ctrl pin: ");
+    Serial.print(F("Use PA ctrl pin: "));
     Serial.println(GPIO_PIN_PA_ENABLE);
     pinMode(GPIO_PIN_PA_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_PA_SE2622L_ENABLE) && (GPIO_PIN_PA_SE2622L_ENABLE != UNDEF_PIN)
-    Serial.print("Use PA ctrl pin: ");
+    Serial.print(F("Use PA ctrl pin: "));
     Serial.println(GPIO_PIN_PA_SE2622L_ENABLE);
     pinMode(GPIO_PIN_PA_SE2622L_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_SE2622L_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_TX_ENABLE) && (GPIO_PIN_TX_ENABLE != UNDEF_PIN)
-    Serial.print("Use TX pin: ");
+    Serial.print(F("Use TX pin: "));
     Serial.println(GPIO_PIN_TX_ENABLE);
     pinMode(GPIO_PIN_TX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_TX_ENABLE, LOW);
 #endif
 
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
-    Serial.print("Use RX pin: ");
+    Serial.print(F("Use RX pin: "));
     Serial.println(GPIO_PIN_RX_ENABLE);
     pinMode(GPIO_PIN_RX_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_RX_ENABLE, LOW);
@@ -95,7 +95,7 @@ void SX1280Hal::init()
 #endif
 
 #ifdef PLATFORM_ESP8266
-    Serial.println("PLATFORM_ESP8266");
+    Serial.println(F("PLATFORM_ESP8266"));
     SPI.begin();
     SPI.setBitOrder(MSBFIRST);
     SPI.setDataMode(SPI_MODE0);
@@ -103,7 +103,7 @@ void SX1280Hal::init()
 #endif
 
 #ifdef PLATFORM_STM32
-    Serial.println("Config SPI");
+    Serial.println(F("Config SPI"));
     SPI.setMOSI(GPIO_PIN_MOSI);
     SPI.setMISO(GPIO_PIN_MISO);
     SPI.setSCLK(GPIO_PIN_SCK);
@@ -119,7 +119,7 @@ void SX1280Hal::init()
 
 void SX1280Hal::reset(void)
 {
-    Serial.println("SX1280 Reset");
+    Serial.println(F("SX1280 Reset"));
     delay(50);
     digitalWrite(GPIO_PIN_RST, LOW);
     delay(50);
@@ -141,7 +141,7 @@ void SX1280Hal::reset(void)
 #endif
 
     //this->BusyState = SX1280_NOT_BUSY;
-    Serial.println("SX1280 Ready!");
+    Serial.println(F("SX1280 Ready!"));
 }
 
 void ICACHE_RAM_ATTR SX1280Hal::WriteCommand(SX1280_RadioCommands_t command, uint8_t val)
@@ -305,7 +305,7 @@ bool ICACHE_RAM_ATTR SX1280Hal::WaitOnBusy()
     {
         if ((micros() - startTime) > wtimeoutUS)
         {
-            //Serial.println("TO");
+            //Serial.println(F("TO"));
             return false;
         }
         else

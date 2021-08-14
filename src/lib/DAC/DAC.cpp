@@ -85,7 +85,7 @@ const dac_lut_s PROGMEM LUT[] =
 
 void DAC::init()
 {
-    Serial.println("Init DAC Driver");
+    Serial.println(F("Init DAC Driver"));
 
     Wire.setSDA(GPIO_PIN_SDA); // set is needed or it wont work :/
     Wire.setSCL(GPIO_PIN_SCL);

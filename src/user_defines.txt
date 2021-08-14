@@ -71,3 +71,5 @@
 
 #If commented out the LED is RGB otherwise GRB
 #-DWS2812_IS_GRB
+
+-DDEBUG_SUPPRESS

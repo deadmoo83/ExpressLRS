@@ -40,24 +40,24 @@ void FHSSrandomiseFHSSsequence(long seed)
 {
 
 #ifdef Regulatory_Domain_AU_915
-    Serial.println("Setting 915MHz Mode");
+    Serial.println(F("Setting 915MHz Mode"));
 #elif defined Regulatory_Domain_FCC_915
-    Serial.println("Setting 915MHz Mode");
+    Serial.println(F("Setting 915MHz Mode"));
 #elif defined Regulatory_Domain_EU_868
-    Serial.println("Setting 868MHz Mode");
+    Serial.println(F("Setting 868MHz Mode"));
 #elif defined Regulatory_Domain_IN_866
-    Serial.println("Setting 866MHz Mode");
+    Serial.println(F("Setting 866MHz Mode"));
 #elif defined Regulatory_Domain_AU_433
-    Serial.println("Setting 433MHz EU Mode");
+    Serial.println(F("Setting 433MHz EU Mode"));
 #elif defined Regulatory_Domain_EU_433
-    Serial.println("Setting 433MHz EU Mode");
+    Serial.println(F("Setting 433MHz EU Mode"));
 #elif defined Regulatory_Domain_ISM_2400
-    Serial.println("Setting 2400MHz Mode");
+    Serial.println(F("Setting 2400MHz Mode"));
 #else
 #error No regulatory domain defined, please define one in common.h
 #endif
 
-    Serial.print("Number of FHSS frequencies =");
+    Serial.print(F("Number of FHSS frequencies ="));
     Serial.println(NR_FHSS_ENTRIES);
 
     rngSeed(seed);
@@ -108,7 +108,7 @@ void FHSSrandomiseFHSSsequence(long seed)
                 if (index == NR_FHSS_ENTRIES)
                 {
                     // This should never happen
-                    Serial.print("FAILED to find the available entry!\n");
+                    Serial.print(F("FAILED to find the available entry!\n"));
                     // What to do? We don't want to hang as that will stop us getting to the wifi hotspot
                     // Use the sync channel
                     index = 0;
@@ -135,7 +135,7 @@ void FHSSrandomiseFHSSsequence(long seed)
         }
         else
         {
-            Serial.print(" ");
+            Serial.print(F(" "));
         }
     } // for each element in FHSSsequence
 
