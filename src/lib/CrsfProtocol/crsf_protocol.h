@@ -343,12 +343,12 @@ struct tagLuaInt16Properties{
     int16_t max;
     int16_t defaultValue;
 }PACKED;
-/*struct tagLuaFloatProperties{
+struct tagLuaFloatProperties{
     float value;
     float min;
     float max;
     float defaultValue;
-}PACKED;*/
+}PACKED;
 
 struct tagLuaDevice {
     const char *label1; //device name
@@ -399,13 +399,13 @@ struct tagLuaItem_int16 {
     const char *label2; //param unit
     uint8_t size;
 } PACKED;
-/*struct tagLuaItem_float {
+struct tagLuaItem_float {
     struct tagLuaProperties1 luaProperties1;
     const char *label1; //param name
     struct tagLuaFloatProperties luaProperties2;
     const char *label2;//param unit
     uint8_t size;
-} PACKED;*/
+} PACKED;
 struct tagLuaItem_string {
     struct tagLuaProperties1 luaProperties1;
     const char *label1; //param name
