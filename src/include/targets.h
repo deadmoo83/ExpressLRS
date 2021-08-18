@@ -593,12 +593,17 @@ Designed by NamimnoRC
 #elif defined(TARGET_RX_LORA32u4II)
 #define GPIO_PIN_NSS            8
 #define GPIO_PIN_DIO0           7
-#define GPIO_PIN_DIO1           -1
-#define GPIO_PIN_MOSI           16
-#define GPIO_PIN_MISO           14
-#define GPIO_PIN_SCK            15
 #define GPIO_PIN_RST            4
-//#define GPIO_PIN_LED            -1
+#define GPIO_PIN_MOSI           16
+#define GPIO_PIN_SCK            15
+#define GPIO_PIN_MISO           14
+#define GPIO_PIN_LED            13
+
+#define GPIO_PIN_RCSIGNAL_RX -1 //only uses default uart pins so leave as -1
+#define GPIO_PIN_RCSIGNAL_TX -1
+#define timerOffset -1
+
+//#define GPIO_PIN_DIO1           -1
 //#define GPIO_PIN_BUTTON         -1
 
 #else

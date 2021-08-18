@@ -1,7 +1,7 @@
 #include "FHSS.h"
 
 uint8_t volatile FHSSptr = 0;
-uint8_t FHSSsequence[256] = {0};
+uint8_t FHSSsequence[NR_SEQUENCE_ENTRIES] = {0};
 
 //uint8_t NumOfFHSSfrequencies = 20;
 int32_t FreqCorrection = 0;

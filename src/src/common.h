@@ -14,9 +14,9 @@
 
 #endif // UNIT_TEST
 
-extern uint8_t BindingUID[6];
+extern const uint8_t BindingUID[6];
 extern uint8_t UID[6];
-extern uint8_t MasterUID[6];
+extern const uint8_t MasterUID[6];
 extern uint16_t CRCInitializer;
 
 typedef enum

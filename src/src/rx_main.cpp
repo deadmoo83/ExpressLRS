@@ -74,6 +74,8 @@ Telemetry telemetry;
 /* CRSF_TX_SERIAL is used by CRSF output */
 #if defined(TARGET_RX_FM30_MINI)
     HardwareSerial CRSF_TX_SERIAL(USART2);
+#elif defined(TARGET_RX_LORA32u24II)
+    #define CRSF_TX_SERIAL Serial1
 #else
     #define CRSF_TX_SERIAL Serial
 #endif
@@ -882,8 +884,8 @@ static void setupSerial()
 #endif
 
 #if defined(PLATFORM_ATMELAVR)
-    CRSF_RX_SERIAL.begin(CRSF_OPENTX_SLOW_BAUDRATE);
-    CRSF_TX_SERIAL.begin(CRSF_OPENTX_SLOW_BAUDRATE);
+    Serial.begin(CRSF_OPENTX_SLOW_BAUDRATE);
+    Serial1.begin(CRSF_RX_BAUDRATE);
 #endif
 
 #if defined(PLATFORM_ESP8266)
@@ -1141,9 +1143,9 @@ static void cycleRfMode()
 }
 
 void setup()
-{
-    while (!Serial)
-    
+{  
+    while(!Serial);
+
     setupGpio();
     // serial setup must be done before anything as some libs write
     // to the serial port and they'll block if the buffer fills
@@ -1190,8 +1192,6 @@ void setup()
 
 void loop()
 {
-    //return;
-
     HandleUARTin();
     if (hwTimer.running == false)
     {

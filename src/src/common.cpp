@@ -96,7 +96,7 @@ uint8_t ExpressLRS_nextAirRateIndex = 0;
 connectionState_e connectionState = disconnected;
 connectionState_e connectionStatePrev = disconnected;
 
-uint8_t BindingUID[6] = {0, 1, 2, 3, 4, 5}; // Special binding UID values
+const uint8_t PROGMEM BindingUID[6] = {0, 1, 2, 3, 4, 5}; // Special binding UID values
 #if defined(MY_UID)
     uint8_t UID[6] = {MY_UID};
 #else
@@ -112,7 +112,7 @@ uint8_t BindingUID[6] = {0, 1, 2, 3, 4, 5}; // Special binding UID values
         uint8_t UID[6] = {0};
     #endif
 #endif
-uint8_t MasterUID[6] = {UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]}; // Special binding UID values
+const uint8_t PROGMEM MasterUID[6] = {UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]}; // Special binding UID values
 
 uint16_t CRCInitializer = (UID[4] << 8) | UID[5];
 

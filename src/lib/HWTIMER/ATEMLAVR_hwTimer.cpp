@@ -13,8 +13,6 @@ volatile int32_t hwTimer::PhaseShift = 0;
 volatile int32_t hwTimer::FreqOffset = 0;
 bool hwTimer::running = false;
 
-#define HWTIMER_TICKS_PER_US 5
-
 void hwTimer::init()
 {
     if (!running)
@@ -47,7 +45,7 @@ void ICACHE_RAM_ATTR hwTimer::resume()
 
 void hwTimer::updateInterval(uint32_t newTimerInterval)
 {
-    hwTimer::HWtimerInterval = newTimerInterval * HWTIMER_TICKS_PER_US;
+    hwTimer::HWtimerInterval = newTimerInterval;
     if (running)
     {
         Timer1.setPeriod(hwTimer::HWtimerInterval >> 1);
@@ -74,7 +72,7 @@ void ICACHE_RAM_ATTR hwTimer::phaseShift(int32_t newPhaseShift)
     int32_t minVal = -(hwTimer::HWtimerInterval >> 2);
     int32_t maxVal = (hwTimer::HWtimerInterval >> 2);
 
-    hwTimer::PhaseShift = constrain(newPhaseShift, minVal, maxVal) * HWTIMER_TICKS_PER_US;
+    hwTimer::PhaseShift = constrain(newPhaseShift, minVal, maxVal);
 }
 
 void ICACHE_RAM_ATTR hwTimer::callback()
