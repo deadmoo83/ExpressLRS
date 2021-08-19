@@ -17,6 +17,9 @@ HardwareSerial CRSF::Port(GPIO_PIN_RCSIGNAL_RX, GPIO_PIN_RCSIGNAL_TX);
 #elif defined(STM32F1) || defined(STM32F1xx)
 #include "stm32f1xx_hal.h"
 #include "stm32f1xx_hal_gpio.h"
+#elif defined(STM32L1) || defined(STM32L1xx)
+#include "stm32l1xx_hal.h"
+#include "stm32l1xx_hal_gpio.h"
 #endif
 #endif
 

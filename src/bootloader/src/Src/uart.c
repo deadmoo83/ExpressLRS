@@ -19,7 +19,7 @@
 #define USART_USE_TX_ISR 0
 #endif
 
-#if defined(STM32F1)
+#if defined(STM32F1) || defined(STM32L1)
 #define StatReg         SR
 #else
 #define StatReg         ISR

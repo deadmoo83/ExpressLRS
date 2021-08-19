@@ -590,6 +590,22 @@ Designed by NamimnoRC
 #define GPIO_PIN_LED            16
 #define GPIO_PIN_BUTTON         0
 
+#elif defined(TARGET_REYAX_RYLR890_RX)
+#define GPIO_PIN_MOSI        PA7
+#define GPIO_PIN_MISO        PA6
+#define GPIO_PIN_SCK         PA5
+#define GPIO_PIN_NSS         PA4
+
+#define GPIO_PIN_DIO1        PB3
+#define GPIO_PIN_RST         PB1
+
+#define GPIO_PIN_BUSY        PC13
+
+#define GPIO_PIN_RCSIGNAL_RX PA10  // USART1, AFAIO
+#define GPIO_PIN_RCSIGNAL_TX PA9   // USART1, AFAIO
+
+#define timerOffset          1
+
 #else
 #error "Unknown target!"
 #endif
