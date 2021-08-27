@@ -66,7 +66,11 @@ void SX127xHal::init()
   SPI.setSCLK(GPIO_PIN_SCK);
   SPI.setBitOrder(MSBFIRST);
   SPI.setDataMode(SPI_MODE0);
+#if defined(TARGET_REYAX_RYLR890_RX)
+  SPI.setClockDivider(SPI_CLOCK_DIV2); // 32 / 2 = 16 MHz
+#elif
   SPI.setClockDivider(SPI_CLOCK_DIV4); // 72 / 8 = 9 MHz
+#endif
   SPI.begin();                         // SPI.setFrequency(10000000);
 #endif
 

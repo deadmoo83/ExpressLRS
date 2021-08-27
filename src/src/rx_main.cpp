@@ -59,7 +59,7 @@ uint32_t LEDWS2812LastUpdate;
 #define PACKET_TO_TOCK_SLACK 200 // Desired buffer time between Packet ISR and Tock ISR
 ///////////////////
 
-#define DEBUG_SUPPRESS // supresses debug messages on uart
+//#define DEBUG_SUPPRESS // supresses debug messages on uart
 //#define PRINT_RX_SCOREBOARD // print a letter for each packet received or missed
 
 uint8_t antenna = 0;    // which antenna is currently in use
@@ -1350,7 +1350,7 @@ void reset_into_bootloader(void)
 {
     CRSF_TX_SERIAL.println((const char *)&target_name[4]);
     CRSF_TX_SERIAL.flush();
-#if defined(PLATFORM_STM32)
+#if defined(PLATFORM_STM32) && !defined(TARGET_REYAX_RYLR890_RX)
     delay(100);
     Serial.println("Jumping to Bootloader...");
     delay(100);
