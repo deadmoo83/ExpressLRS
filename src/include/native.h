@@ -13,6 +13,7 @@
 typedef uint8_t byte;
 
 #define HEX 16
+#define DEC 10
 
 class Stream
 {
@@ -40,6 +41,7 @@ public:
     void flush() {}
     void end() {}
     void begin(int baud) {}
+    void enableHalfDuplexRx() {}
 
     // Print methods
     size_t write(uint8_t c) {return 1;}

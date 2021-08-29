@@ -24,7 +24,7 @@ SX1280Driver Radio;
 #include "stubborn_receiver.h"
 
 #include "FHSS.h"
-// #include "Debug.h"
+#include "logging.h"
 #include "OTA.h"
 #include "msp.h"
 #include "msptypes.h"
@@ -58,9 +58,6 @@ uint32_t LEDWS2812LastUpdate;
 #define DIVERSITY_ANTENNA_RSSI_TRIGGER 5
 #define PACKET_TO_TOCK_SLACK 200 // Desired buffer time between Packet ISR and Tock ISR
 ///////////////////
-
-#define DEBUG_SUPPRESS // supresses debug messages on uart
-//#define PRINT_RX_SCOREBOARD // print a letter for each packet received or missed
 
 uint8_t antenna = 0;    // which antenna is currently in use
 
@@ -163,7 +160,7 @@ uint32_t LastSyncPacket = 0;            //Time the last valid packet was recv
 uint32_t SendLinkStatstoFCintervalLastSent = 0;
 
 int16_t RFnoiseFloor; //measurement of the current RF noise floor
-#if defined(PRINT_RX_SCOREBOARD)
+#if defined(DEBUG_RX_SCOREBOARD)
 static bool lastPacketCrcError;
 #endif
 ///////////////////////////////////////////////////////////////
@@ -176,11 +173,21 @@ uint8_t RFmodeCycleMultiplier;
 bool LockRFmode = false;
 ///////////////////////////////////////
 
+#if defined(BF_DEBUG_LINK_STATS)
+// Debug vars
+uint8_t debug1 = 0;
+uint8_t debug2 = 0;
+uint8_t debug3 = 0;
+int8_t debug4 = 0;
+///////////////////////////////////////
+#endif
+
 bool InBindingMode = false;
 
 void reset_into_bootloader(void);
 void EnterBindingMode();
 void ExitBindingMode();
+void UpdateModelMatch(uint8_t model);
 void OnELRSBindMSP(uint8_t* packet);
 
 static uint8_t minLqForChaos()
@@ -191,11 +198,12 @@ static uint8_t minLqForChaos()
     // The amount of time we coexist on the same channel is
     // 100 divided by the total number of packets in a FHSS loop (rounded up)
     // and there would be 4x packets received each time it passes by so
-    // FHSShopInterval * ceil(100 / FHSShopInterval * NR_FHSS_ENTRIES) or
-    // FHSShopInterval * trunc((100 + (FHSShopInterval * NR_FHSS_ENTRIES) - 1) / (FHSShopInterval * NR_FHSS_ENTRIES))
+    // FHSShopInterval * ceil(100 / FHSShopInterval * numfhss) or
+    // FHSShopInterval * trunc((100 + (FHSShopInterval * numfhss) - 1) / (FHSShopInterval * numfhss))
     // With a interval of 4 this works out to: 2.4=4, FCC915=4, AU915=8, EU868=8, EU/AU433=36
-    uint8_t interval = ExpressLRS_currAirRate_Modparams->FHSShopInterval;
-    return interval * ((interval * NR_FHSS_ENTRIES + 99) / (interval * NR_FHSS_ENTRIES));
+    const uint32_t numfhss = FHSSNumEntriess();
+    const uint8_t interval = ExpressLRS_currAirRate_Modparams->FHSShopInterval;
+    return interval * ((interval * numfhss + 99) / (interval * numfhss));
 }
 void ICACHE_RAM_ATTR getRFlinkInfo()
 {
@@ -220,12 +228,22 @@ void ICACHE_RAM_ATTR getRFlinkInfo()
 
     // BetaFlight/iNav expect positive values for -dBm (e.g. -80dBm -> sent as 80)
     crsf.LinkStatistics.uplink_RSSI_1 = -rssiDBM0;
-    crsf.LinkStatistics.uplink_RSSI_2 = -rssiDBM1;
     crsf.LinkStatistics.active_antenna = antenna;
     crsf.LinkStatistics.uplink_SNR = Radio.LastPacketSNR;
     crsf.LinkStatistics.uplink_Link_quality = uplinkLQ;
     crsf.LinkStatistics.rf_Mode = (uint8_t)RATE_4HZ - (uint8_t)ExpressLRS_currAirRate_Modparams->enum_rate;
-    //Serial.println(crsf.LinkStatistics.uplink_RSSI_1);
+    //DBGLN(crsf.LinkStatistics.uplink_RSSI_1);
+    #if defined(DEBUG_BF_LINK_STATS)
+    crsf.LinkStatistics.downlink_RSSI = debug1;
+    crsf.LinkStatistics.downlink_Link_quality = debug2;
+    crsf.LinkStatistics.downlink_SNR = debug3;
+    crsf.LinkStatistics.uplink_RSSI_2 = debug4;
+    #else
+    crsf.LinkStatistics.downlink_RSSI = 0;
+    crsf.LinkStatistics.downlink_Link_quality = 0;
+    crsf.LinkStatistics.downlink_SNR = 0;
+    crsf.LinkStatistics.uplink_RSSI_2 = -rssiDBM1;
+    #endif
 }
 
 void SetRFLinkRate(uint8_t index) // Set speed of RF link
@@ -238,7 +256,7 @@ void SetRFLinkRate(uint8_t index) // Set speed of RF link
     Radio.Config(ModParams->bw, ModParams->sf, ModParams->cr, GetInitialFreq(), ModParams->PreambleLen, invertIQ, ModParams->PayloadLength);
 
     // Wait for (11/10) 110% of time it takes to cycle through all freqs in FHSS table (in ms)
-    cycleInterval = ((uint32_t)11U * NR_FHSS_ENTRIES * ModParams->FHSShopInterval * ModParams->interval) / (10U * 1000U);
+    cycleInterval = ((uint32_t)11U * FHSSNumEntriess() * ModParams->FHSShopInterval * ModParams->interval) / (10U * 1000U);
 
     ExpressLRS_currAirRate_Modparams = ModParams;
     ExpressLRS_currAirRate_RFperfParams = RFperf;
@@ -331,7 +349,7 @@ bool ICACHE_RAM_ATTR HandleSendTelemetryResponse()
 
 void ICACHE_RAM_ATTR HandleFreqCorr(bool value)
 {
-    //Serial.println(FreqCorrection);
+    //DBGVLN(FreqCorrection);
     if (!value)
     {
         if (FreqCorrection < FreqCorrectionMax)
@@ -342,9 +360,7 @@ void ICACHE_RAM_ATTR HandleFreqCorr(bool value)
         {
             FreqCorrection = FreqCorrectionMax;
             FreqCorrection = 0; //reset because something went wrong
-#ifndef DEBUG_SUPPRESS
-            Serial.println("Max pos reasontable freq offset correction limit reached!");
-#endif
+            DBGLN("Max +FreqCorrection reached!");
         }
     }
     else
@@ -357,9 +373,7 @@ void ICACHE_RAM_ATTR HandleFreqCorr(bool value)
         {
             FreqCorrection = FreqCorrectionMin;
             FreqCorrection = 0; //reset because something went wrong
-#ifndef DEBUG_SUPPRESS
-            Serial.println("Max neg reasontable freq offset correction limit reached!");
-#endif
+            DBGLN("Max -FreqCorrection reached!");
         }
     }
 }
@@ -402,17 +416,7 @@ void ICACHE_RAM_ATTR updatePhaseLock()
         prevRawOffset = RawOffset;
     }
 
-#ifndef DEBUG_SUPPRESS
-    Serial.print(Offset);
-    Serial.print(":");
-    Serial.print(RawOffset);
-    Serial.print(":");
-    Serial.print(OffsetDx);
-    Serial.print(":");
-    Serial.print(hwTimer.FreqOffset);
-    Serial.print(":");
-    Serial.println(uplinkLQ);
-#endif
+    DBGVLN("%d:%d:%d:%d:%d", Offset, RawOffset, OffsetDx, hwTimer.FreqOffset, uplinkLQ);
 }
 
 void ICACHE_RAM_ATTR HWtimerCallbackTick() // this is 180 out of phase with the other callback, occurs mid-packet reception
@@ -519,10 +523,10 @@ void ICACHE_RAM_ATTR HWtimerCallbackTock()
         (void)tlmSent;
     #endif /* Regulatory_Domain_ISM_2400 */
 
-    #if defined(PRINT_RX_SCOREBOARD)
+    #if defined(DEBUG_RX_SCOREBOARD)
     static bool lastPacketWasTelemetry = false;
     if (!LQCalc.currentIsSet() && !lastPacketWasTelemetry)
-        Serial.write(lastPacketCrcError ? '.' : '_');
+        DBGW(lastPacketCrcError ? '.' : '_');
     lastPacketCrcError = false;
     lastPacketWasTelemetry = tlmSent;
     #endif
@@ -530,8 +534,7 @@ void ICACHE_RAM_ATTR HWtimerCallbackTock()
 
 void LostConnection()
 {
-    Serial.print(F("lost conn fc=")); Serial.print(FreqCorrection, DEC);
-    Serial.print(F(" fo=")); Serial.println(hwTimer.FreqOffset, DEC);
+    DBGLN("lost conn fc=%d fo=%d", FreqCorrection, hwTimer.FreqOffset);
 
     RFmodeCycleMultiplier = 1;
     connectionStatePrev = connectionState;
@@ -576,31 +579,31 @@ void LostConnection()
 #endif
 }
 
-void ICACHE_RAM_ATTR TentativeConnection()
+void ICACHE_RAM_ATTR TentativeConnection(unsigned long now)
 {
     PFDloop.reset();
     connectionStatePrev = connectionState;
     connectionState = tentative;
     RXtimerState = tim_disconnected;
-    Serial.println("tentative conn");
+    DBGLN("tentative conn");
     FreqCorrection = 0;
     Offset = 0;
     prevOffset = 0;
     LPF_Offset.init(0);
-    RFmodeLastCycled = millis(); // give another 3 sec for lock to occur
+    RFmodeLastCycled = now; // give another 3 sec for lock to occur
 
 #if WS2812_LED_IS_USED
     uint8_t LEDcolor[3] = {0};
     LEDcolor[(2 - ExpressLRS_currAirRate_Modparams->index) % 3] = 50;
     WS281BsetLED(LEDcolor);
-    LEDWS2812LastUpdate = millis();
+    LEDWS2812LastUpdate = now;
 #endif
 
     // The caller MUST call hwTimer.resume(). It is not done here because
     // the timer ISR will fire immediately and preempt any other code
 }
 
-void GotConnection()
+void GotConnection(unsigned long now)
 {
     if (connectionState == connected)
     {
@@ -615,15 +618,15 @@ void GotConnection()
     connectionState = connected; //we got a packet, therefore no lost connection
     disableWebServer = true;
     RXtimerState = tim_tentative;
-    GotConnectionMillis = millis();
+    GotConnectionMillis = now;
 
-    Serial.println("got conn");
+    DBGLN("got conn");
 
 #if WS2812_LED_IS_USED
     uint8_t LEDcolor[3] = {0};
     LEDcolor[(2 - ExpressLRS_currAirRate_Modparams->index) % 3] = 255;
     WS281BsetLED(LEDcolor);
-    LEDWS2812LastUpdate = millis();
+    LEDWS2812LastUpdate = now;
 #endif
 
 #ifdef GPIO_PIN_LED_GREEN
@@ -652,16 +655,13 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
 
     if (inCRC != calculatedCRC)
     {
-        #ifndef DEBUG_SUPPRESS
-        Serial.print("CRC error on RF packet: ");
+        DBGV("CRC error: ");
         for (int i = 0; i < 8; i++)
         {
-            Serial.print(Radio.RXdataBuffer[i], HEX);
-            Serial.print(",");
+            DBGV("%x,", Radio.RXdataBuffer[i]);
         }
-        Serial.println("");
-        #endif
-        #if defined(PRINT_RX_SCOREBOARD)
+        DBGVCR;
+        #if defined(DEBUG_RX_SCOREBOARD)
             lastPacketCrcError = true;
         #endif
         return;
@@ -673,8 +673,9 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
     bool telemetryConfirmValue;
     bool currentMspConfirmValue;
     bool doStartTimer = false;
+    unsigned long now = millis();
 
-    LastValidPacket = millis();
+    LastValidPacket = now;
 
     getRFlinkInfo();
 
@@ -707,8 +708,15 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
         }
         else if (MspReceiver.HasFinishedData())
         {
-            crsf.sendMSPFrameToFC(MspData);
-            MspReceiver.Unlock();
+            if (MspData[7] == MSP_SET_RX_CONFIG && MspData[8] == MSP_ELRS_MODEL_ID)
+            {
+                UpdateModelMatch(MspData[9]);
+            }
+            else
+            {
+                crsf.sendMSPFrameToFC(MspData);
+                MspReceiver.Unlock();
+            }
         }
         break;
 
@@ -722,8 +730,6 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
          TLMrateIn = (Radio.RXdataBuffer[3] & 0b00111000) >> 3;
          switch((Radio.RXdataBuffer[3] & 0b00000110) >> 1) {
              case 0b00:
-                UnpackChannelData = UnpackChannelData10bit;
-                modeSupportsTelemetry = false;
                 break;
              case 0b01:
                 UnpackChannelData = UnpackChannelDataHybridSwitch8;
@@ -735,19 +741,16 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
                 break;
          }
 
-         if (Radio.RXdataBuffer[4] == UID[3] && Radio.RXdataBuffer[5] == UID[4] && Radio.RXdataBuffer[6] == UID[5])
+         if (Radio.RXdataBuffer[4] == UID[3] && Radio.RXdataBuffer[5] == UID[4] && Radio.RXdataBuffer[6] == (UID[5] ^ config.GetModelId()))
          {
-             LastSyncPacket = millis();
-#if defined(PRINT_RX_SCOREBOARD)
-             Serial.write('s');
+             LastSyncPacket = now;
+#if defined(DEBUG_RX_SCOREBOARD)
+             DBGW('s');
 #endif
 
              if (ExpressLRS_currAirRate_Modparams->TLMinterval != (expresslrs_tlm_ratio_e)TLMrateIn)
              { // change link parameters if required
-#ifndef DEBUG_SUPPRESS
-                 Serial.println("New TLMrate: ");
-                 Serial.println(TLMrateIn);
-#endif
+                 DBGLN("New TLMrate: %d", TLMrateIn);
                  ExpressLRS_currAirRate_Modparams->TLMinterval = (expresslrs_tlm_ratio_e)TLMrateIn;
                  telemBurstValid = false;
              }
@@ -761,10 +764,10 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
                 || NonceRX != Radio.RXdataBuffer[2]
                 || FHSSgetCurrIndex() != Radio.RXdataBuffer[1])
              {
-                 //Serial.print(NonceRX, DEC); Serial.write('x'); Serial.println(Radio.RXdataBuffer[2], DEC);
+                 //DBGVLN("%dx%d", NonceRX, Radio.RXdataBuffer[2]);
                  FHSSsetCurrIndex(Radio.RXdataBuffer[1]);
                  NonceRX = Radio.RXdataBuffer[2];
-                 TentativeConnection();
+                 TentativeConnection(now);
                  doStartTimer = true;
              }
          }
@@ -780,8 +783,8 @@ void ICACHE_RAM_ATTR ProcessRFPacket()
     RFmodeCycleMultiplier = RFmodeCycleMultiplierSlow;
 
     doneProcessing = micros();
-#if defined(PRINT_RX_SCOREBOARD)
-    if (type != SYNC_PACKET) Serial.write('R');
+#if defined(DEBUG_RX_SCOREBOARD)
+    if (type != SYNC_PACKET) DBGW('R');
 #endif
     if (doStartTimer)
         hwTimer.resume(); // will throw an interrupt immediately
@@ -796,7 +799,7 @@ void beginWebsever()
 #endif
 }
 
-void sampleButton()
+void sampleButton(unsigned long now)
 {
 #ifdef GPIO_PIN_BUTTON
     bool buttonValue = digitalRead(GPIO_PIN_BUTTON);
@@ -811,14 +814,14 @@ void sampleButton()
         buttonDown = false;
     }
 
-    if ((millis() > buttonLastPressed + WEB_UPDATE_PRESS_INTERVAL) && buttonDown)
+    if ((now > buttonLastPressed + WEB_UPDATE_PRESS_INTERVAL) && buttonDown)
     { // button held down for WEB_UPDATE_PRESS_INTERVAL
         if (!webUpdateMode)
         {
             beginWebsever();
         }
     }
-    if ((millis() > buttonLastPressed + BUTTON_RESET_INTERVAL) && buttonDown)
+    if ((now > buttonLastPressed + BUTTON_RESET_INTERVAL) && buttonDown)
     {
 #ifdef PLATFORM_ESP8266
         ESP.restart();
@@ -836,8 +839,8 @@ void ICACHE_RAM_ATTR RXdoneISR()
 void ICACHE_RAM_ATTR TXdoneISR()
 {
     Radio.RXnb();
-#if defined(PRINT_RX_SCOREBOARD)
-    Serial.write('T');
+#if defined(DEBUG_RX_SCOREBOARD)
+    DBGW('T');
 #endif
 }
 
@@ -938,42 +941,29 @@ static void setupBindingFromConfig()
     // Check the byte that indicates if RX has been bound
     if (config.GetIsBound())
     {
-        Serial.println("RX has been bound previously, reading the UID from eeprom...");
+        DBGLN("RX has been bound previously, reading the UID from eeprom...");
         const uint8_t* storedUID = config.GetUID();
         for (uint8_t i = 0; i < UID_LEN; ++i)
         {
             UID[i] = storedUID[i];
         }
-
-        Serial.print("UID = ");
-        Serial.print(UID[0]);
-        Serial.print(", ");
-        Serial.print(UID[1]);
-        Serial.print(", ");
-        Serial.print(UID[2]);
-        Serial.print(", ");
-        Serial.print(UID[3]);
-        Serial.print(", ");
-        Serial.print(UID[4]);
-        Serial.print(", ");
-        Serial.println(UID[5]);
-
+        DBGLN("UID = %d, %d, %d, %d, %d, %d", UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]);
         CRCInitializer = (UID[4] << 8) | UID[5];
     }
 #endif
 }
 
 #if defined(PLATFORM_ESP8266)
-static void WebUpdateLoop()
+static void WebUpdateLoop(unsigned long now)
 {
     HandleWebUpdate();
-    if (millis() - LEDLastUpdate > LED_INTERVAL_WEB_UPDATE)
+    if (now - LEDLastUpdate > LED_INTERVAL_WEB_UPDATE)
     {
         #ifdef GPIO_PIN_LED
         digitalWrite(GPIO_PIN_LED, LED ^ GPIO_LED_RED_INVERTED);
         #endif
         LED = !LED;
-        LEDLastUpdate = millis();
+        LEDLastUpdate = now;
     }
 }
 #endif
@@ -992,6 +982,10 @@ static void HandleUARTin()
         {
             EnterBindingMode();
         }
+        if (telemetry.ShouldCallUpdateModelMatch())
+        {
+            UpdateModelMatch(telemetry.GetUpdatedModelMatch());
+        }
     }
 }
 
@@ -1005,12 +999,12 @@ static void setupRadio()
 #ifdef PLATFORM_ESP8266
     if (!init_success)
     {
-        Serial.println("Failed to detect RF chipset!!!");
+        DBGLN("Failed to detect RF chipset!!!");
         beginWebsever();
         while (1)
         {
             HandleUARTin();
-            WebUpdateLoop();
+            WebUpdateLoop(millis());
         }
     }
 #else // target does not have wifi
@@ -1021,7 +1015,7 @@ static void setupRadio()
         LED = !LED;
         #endif
         delay(LED_INTERVAL_ERROR);
-        Serial.println("Failed to detect RF chipset!!!");
+        DBGLN("Failed to detect RF chipset!!!");
         HandleUARTin();
     }
 #endif
@@ -1082,7 +1076,7 @@ static void updateTelemetryBurst()
         --telemetryBurstMax;
     else
         telemetryBurstMax = 1;
-    //Serial.print("TLMburst:"); Serial.println(telemetryBurstMax, DEC);
+    //DBGLN("TLMburst: %d", telemetryBurstMax);
 
     // Notify the sender to adjust its expected throughput
     TelemetrySender.UpdateTelemetryRate(hz, ratiodiv, telemetryBurstMax);
@@ -1091,20 +1085,21 @@ static void updateTelemetryBurst()
 /* If not connected will rotate through the RF modes looking for sync
  * and blink LED
  */
-static void cycleRfMode()
+static void cycleRfMode(unsigned long now)
 {
     if (connectionState == connected || InBindingMode || webUpdateMode)
         return;
 
     // Actually cycle the RF mode if not LOCK_ON_FIRST_CONNECTION
-    if (LockRFmode == false && (millis() - RFmodeLastCycled) > (cycleInterval * RFmodeCycleMultiplier))
+    if (LockRFmode == false && (now - RFmodeLastCycled) > (cycleInterval * RFmodeCycleMultiplier))
     {
-        RFmodeLastCycled = millis();
-        LastSyncPacket = millis();           // reset this variable
+        RFmodeLastCycled = now;
+        LastSyncPacket = now;           // reset this variable
         SetRFLinkRate(scanIndex % RATE_MAX); // switch between rates
-        SendLinkStatstoFCintervalLastSent = millis();
+        SendLinkStatstoFCintervalLastSent = now;
         LQCalc.reset();
-        Serial.println(ExpressLRS_currAirRate_Modparams->interval);
+        // Display the current air rate to the user as an indicator something is happening
+        INFOLN("%d", ExpressLRS_currAirRate_Modparams->interval);
         scanIndex++;
         getRFlinkInfo();
         crsf.sendLinkStatisticsToFC();
@@ -1117,7 +1112,7 @@ static void cycleRfMode()
     } // if time to switch RF mode
 
     // Always blink the LED at a steady rate when not connected, independent of the cycle status
-    if (millis() - LEDLastUpdate > LED_INTERVAL_DISCONNECTED)
+    if (now - LEDLastUpdate > LED_INTERVAL_DISCONNECTED)
     {
         #ifdef GPIO_PIN_LED
             digitalWrite(GPIO_PIN_LED, LED ^ GPIO_LED_RED_INVERTED);
@@ -1125,7 +1120,7 @@ static void cycleRfMode()
             digitalWrite(GPIO_PIN_LED_GREEN, LED ^ GPIO_LED_GREEN_INVERTED);
         #endif
         LED = !LED;
-        LEDLastUpdate = millis();
+        LEDLastUpdate = now;
     } // if cycle LED
 }
 
@@ -1138,32 +1133,18 @@ void setup()
     // Init EEPROM and load config, checking powerup count
     setupConfigAndPocCheck();
 
-    Serial.println("ExpressLRS Module Booting...");
-#if defined Regulatory_Domain_AU_915 || defined Regulatory_Domain_FCC_915
-    Serial.println("Setting 915MHz Mode");
-#elif defined Regulatory_Domain_EU_868
-    Serial.println("Setting 868MHz Mode");
-#elif defined Regulatory_Domain_IN_866
-    Serial.println("Setting 866MHz Mode");
-#elif defined Regulatory_Domain_AU_433 || defined Regulatory_Domain_EU_433
-    Serial.println("Setting 433MHz Mode");
-#elif defined Regulatory_Domain_ISM_2400
-    Serial.println("Setting 2.4GHz Mode");
-#endif
+    INFOLN("ExpressLRS Module Booting...");
 
     wifiOff();
     ws2812Blink();
     setupBindingFromConfig();
 
-    long macSeed = ((long)UID[2] << 24) + ((long)UID[3] << 16) + ((long)UID[4] << 8) + UID[5];
-    FHSSrandomiseFHSSsequence(macSeed);
+    FHSSrandomiseFHSSsequence(uidMacSeedGet());
 
     setupRadio();
 
     // RFnoiseFloor = MeasureNoiseFloor(); //TODO move MeasureNoiseFloor to driver libs
-    // Serial.print("RF noise floor: ");
-    // Serial.print(RFnoiseFloor);
-    // Serial.println("dBm");
+    // DBGLN("RF noise floor: %d dBm", RFnoiseFloor);
 
     hwTimer.callbackTock = &HWtimerCallbackTock;
     hwTimer.callbackTick = &HWtimerCallbackTick;
@@ -1177,6 +1158,7 @@ void setup()
 
 void loop()
 {
+    unsigned long now = millis();
     HandleUARTin();
     if (hwTimer.running == false)
     {
@@ -1184,54 +1166,54 @@ void loop()
     }
 
     #if defined(PLATFORM_ESP8266) && defined(AUTO_WIFI_ON_INTERVAL)
-    if (!disableWebServer && (connectionState == disconnected) && !webUpdateMode && !InBindingMode && millis() > (AUTO_WIFI_ON_INTERVAL*1000))
+    if (!disableWebServer && (connectionState == disconnected) && !webUpdateMode && !InBindingMode && now > (AUTO_WIFI_ON_INTERVAL*1000))
     {
         beginWebsever();
     }
 
-    if (!disableWebServer && (connectionState == disconnected) && !webUpdateMode && InBindingMode && millis() > 60000)
+    if (!disableWebServer && (connectionState == disconnected) && !webUpdateMode && InBindingMode && now > 60000)
     {
         beginWebsever();
     }
 
     if (webUpdateMode)
     {
-        WebUpdateLoop();
+        WebUpdateLoop(now);
         return;
     }
     #endif
 
     if ((connectionState != disconnected) && (ExpressLRS_nextAirRateIndex != ExpressLRS_currAirRate_Modparams->index)){ // forced change
         LostConnection();
-        LastSyncPacket = millis();           // reset this variable to stop rf mode switching and add extra time
-        RFmodeLastCycled = millis();         // reset this variable to stop rf mode switching and add extra time
-        Serial.println("Air rate change req via sync");
+        LastSyncPacket = now;           // reset this variable to stop rf mode switching and add extra time
+        RFmodeLastCycled = now;         // reset this variable to stop rf mode switching and add extra time
+        DBGLN("Air rate change req via sync");
         crsf.sendLinkStatisticsToFC();
         crsf.sendLinkStatisticsToFC(); // need to send twice, not sure why, seems like a BF bug?
     }
 
-    if (connectionState == tentative && (millis() - LastSyncPacket > ExpressLRS_currAirRate_RFperfParams->RFmodeCycleAddtionalTime))
+    if (connectionState == tentative && (now - LastSyncPacket > ExpressLRS_currAirRate_RFperfParams->RFmodeCycleAddtionalTime))
     {
         LostConnection();
-        Serial.println("Bad sync, aborting");
-        RFmodeLastCycled = millis();
-        LastSyncPacket = millis();
+        DBGLN("Bad sync, aborting");
+        RFmodeLastCycled = now;
+        LastSyncPacket = now;
     }
 
-    cycleRfMode();
+    cycleRfMode(now);
 
     uint32_t localLastValidPacket = LastValidPacket; // Required to prevent race condition due to LastValidPacket getting updated from ISR
-    if ((connectionState == connected) && ((int32_t)ExpressLRS_currAirRate_RFperfParams->RFmodeCycleInterval < (int32_t)(millis() - localLastValidPacket))) // check if we lost conn.
+    if ((connectionState == connected) && ((int32_t)ExpressLRS_currAirRate_RFperfParams->RFmodeCycleInterval < (int32_t)(now - localLastValidPacket))) // check if we lost conn.
     {
         LostConnection();
     }
 
     if ((connectionState == tentative) && (abs(OffsetDx) <= 10) && (Offset < 100) && (LQCalc.getLQRaw() > minLqForChaos())) //detects when we are connected
     {
-        GotConnection();
+        GotConnection(now);
     }
 
-    if (millis() > (SendLinkStatstoFCintervalLastSent + SEND_LINK_STATS_TO_FC_INTERVAL))
+    if (now > (SendLinkStatstoFCintervalLastSent + SEND_LINK_STATS_TO_FC_INTERVAL))
     {
         if (connectionState == disconnected)
         {
@@ -1240,26 +1222,24 @@ void loop()
         if (connectionState != disconnected)
         {
             crsf.sendLinkStatisticsToFC();
-            SendLinkStatstoFCintervalLastSent = millis();
+            SendLinkStatstoFCintervalLastSent = now;
         }
     }
 
-    if (millis() > (buttonLastSampled + BUTTON_SAMPLE_INTERVAL))
+    if (now > (buttonLastSampled + BUTTON_SAMPLE_INTERVAL))
     {
-        sampleButton();
-        buttonLastSampled = millis();
+        sampleButton(now);
+        buttonLastSampled = now;
     }
 
-    if ((RXtimerState == tim_tentative) && ((millis() - GotConnectionMillis) > ConsiderConnGoodMillis) && (abs(OffsetDx) <= 5))
+    if ((RXtimerState == tim_tentative) && ((now - GotConnectionMillis) > ConsiderConnGoodMillis) && (abs(OffsetDx) <= 5))
     {
         RXtimerState = tim_locked;
-        #ifndef DEBUG_SUPPRESS
-        Serial.println("Timer Considered Locked");
-        #endif
+        DBGLN("Timer locked");
     }
 
 #if WS2812_LED_IS_USED
-    if ((connectionState == disconnected) && (millis() - LEDWS2812LastUpdate > 25))
+    if ((connectionState == disconnected) && (now - LEDWS2812LastUpdate > 25))
     {
         uint8_t LEDcolor[3] = {0};
         if (LEDfade == 30 || LEDfade == 0)
@@ -1270,7 +1250,7 @@ void loop()
         LEDfadeDir ? LEDfade = LEDfade + 2 :  LEDfade = LEDfade - 2;
         LEDcolor[(2 - ExpressLRS_currAirRate_Modparams->index) % 3] = LEDfade;
         WS281BsetLED(LEDcolor);
-        LEDWS2812LastUpdate = millis();
+        LEDWS2812LastUpdate = now;
     }
 #endif
 
@@ -1278,7 +1258,7 @@ void loop()
     // and we're not already in binding mode, enter binding
     if (!config.GetIsBound() && !InBindingMode)
     {
-        Serial.println("RX has not been bound, enter binding mode...");
+        INFOLN("RX has not been bound, enter binding mode...");
         EnterBindingMode();
     }
 
@@ -1289,14 +1269,14 @@ void loop()
         config.SetPowerOnCounter(0);
         config.Commit();
 
-        Serial.println("Power on counter >=3, enter binding mode...");
+        INFOLN("Power on counter >=3, enter binding mode...");
         EnterBindingMode();
     }
 #endif
     // Update the LED while in binding mode
     if (InBindingMode)
     {
-        if (millis() > LEDLastUpdate) // LEDLastUpdate is actually next update here, flagged for refactor
+        if (now > LEDLastUpdate) // LEDLastUpdate is actually next update here, flagged for refactor
         {
             if (LEDPulseCounter == 0)
             {
@@ -1313,11 +1293,11 @@ void loop()
 
             if (LEDPulseCounter < 4)
             {
-                LEDLastUpdate = millis() + LED_INTERVAL_BIND_SHORT;
+                LEDLastUpdate = now + LED_INTERVAL_BIND_SHORT;
             }
             else
             {
-                LEDLastUpdate = millis() + LED_INTERVAL_BIND_LONG;
+                LEDLastUpdate = now + LED_INTERVAL_BIND_LONG;
                 LEDPulseCounter = 0;
             }
 
@@ -1352,7 +1332,7 @@ void reset_into_bootloader(void)
     CRSF_TX_SERIAL.flush();
 #if defined(PLATFORM_STM32)
     delay(100);
-    Serial.println("Jumping to Bootloader...");
+    DBGLN("Jumping to Bootloader...");
     delay(100);
 
     /** Write command for firmware update.
@@ -1379,7 +1359,7 @@ void EnterBindingMode()
         // Don't enter binding if:
         // - we're already connected
         // - we're already binding
-        Serial.println("Cannot enter binding mode!");
+        DBGLN("Cannot enter binding mode!");
         return;
     }
     if (webUpdateMode) {
@@ -1412,15 +1392,14 @@ void EnterBindingMode()
     // If the Radio Params (including InvertIQ) parameter changed, need to restart RX to take effect
     Radio.RXnb();
 
-    Serial.print("Entered binding mode at freq = ");
-    Serial.println(Radio.currFreq);
+    DBGLN("Entered binding mode at freq = %d", Radio.currFreq);
 }
 
 void ExitBindingMode()
 {
     if (!InBindingMode) {
         // Not in binding mode
-        Serial.println("Cannot exit binding mode, not in binding mode!");
+        DBGLN("Cannot exit binding mode, not in binding mode!");
         return;
     }
 
@@ -1444,18 +1423,7 @@ void OnELRSBindMSP(uint8_t* packet)
 
     CRCInitializer = (UID[4] << 8) | UID[5];
 
-    Serial.print("New UID = ");
-    Serial.print(UID[0]);
-    Serial.print(", ");
-    Serial.print(UID[1]);
-    Serial.print(", ");
-    Serial.print(UID[2]);
-    Serial.print(", ");
-    Serial.print(UID[3]);
-    Serial.print(", ");
-    Serial.print(UID[4]);
-    Serial.print(", ");
-    Serial.println(UID[5]);
+    DBGLN("New UID = %d, %d, %d, %d, %d, %d", UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]);
 
     // Set new UID in eeprom
     config.SetUID(UID);
@@ -1466,9 +1434,20 @@ void OnELRSBindMSP(uint8_t* packet)
     // Write the values to eeprom
     config.Commit();
 
-    long macSeed = ((long)UID[2] << 24) + ((long)UID[3] << 16) + ((long)UID[4] << 8) + UID[5];
-    FHSSrandomiseFHSSsequence(macSeed);
+    FHSSrandomiseFHSSsequence(uidMacSeedGet());
 
     disableWebServer = true;
     ExitBindingMode();
+}
+
+void UpdateModelMatch(uint8_t model)
+{
+    config.SetModelId(model);
+    config.Commit();
+    delay(100);
+#if defined(PLATFORM_STM32)
+    HAL_NVIC_SystemReset();
+#elif defined(PLATFORM_ESP8266)
+    ESP.restart();
+#endif
 }

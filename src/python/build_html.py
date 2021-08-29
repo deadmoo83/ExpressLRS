@@ -26,7 +26,7 @@ def get_git_version(env):
             except ImportError:
                 git = None
 
-    sha = None
+    ver = None
     if git:
         try:
             git_repo = git.Repo(
@@ -38,7 +38,7 @@ def get_git_version(env):
                 try:
                     ver = git_repo.git.symbolic_ref("-q", "--short", "HEAD")
                 except git.exc.GitCommandError:
-                    ver = "unknown"
+                    ver = "ver. unknown"
             hash = git_repo.git.rev_parse("--short", "HEAD")
         except git.InvalidGitRepositoryError:
             pass
