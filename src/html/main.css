@@ -846,7 +846,7 @@ th {
   .alert-frame {
 	background: #fff;
 	min-height: 400px;
-	width: 300px;
+	width: 450px;
 	box-shadow: 5px 5px 10px rgb(0, 0, 0, 0.2);
 	border-radius: 10px;
 	animation: open-frame 0.3s linear;
@@ -1164,4 +1164,13 @@ th {
   .info-bg {
 	background: #88cef7;
   }
-  
+  /* Custon code for ExpressLRS PWM Output table */
+  .pwmtbl th {
+	text-align: center;
+	font-weight: bold;
+  }
+  .pwmtbl td {
+	text-align: center;
+	padding-left: 2px;
+	padding-right: 2px;
+  }

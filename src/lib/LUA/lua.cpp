@@ -1,107 +1,262 @@
-#ifdef TARGET_TX
-
 #include "lua.h"
+#include "common.h"
 #include "CRSF.h"
 #include "logging.h"
 
-const char txDeviceName[] = TX_DEVICE_NAME;
+#ifdef TARGET_RX
+#include "telemetry.h"
+#endif
 
 extern CRSF crsf;
+extern bool IsArmed();
 
-static uint8_t allLUAparamSent = 0;  
+#ifdef TARGET_RX
+extern Telemetry telemetry;
+#endif
+
 static volatile bool UpdateParamReq = false;
 
 //LUA VARIABLES//
-#define LUA_PKTCOUNT_INTERVAL_MS 1000LU
-static uint8_t luaWarningFLags = false;
-static uint8_t suppressedLuaWarningFlags = true;
 
-static const void *paramDefinitions[32] = {0};
-static luaCallback paramCallbacks[32] = {0};
+#ifdef TARGET_TX
+static uint8_t luaWarningFlags = 0b00000000; //8 flag, 1 bit for each flag. set the bit to 1 to show specific warning. 3 MSB is for critical flag
+static uint8_t suppressedLuaWarningFlags = 0xFF; //8 flag, 1 bit for each flag. set the bit to 0 to suppress specific warning
 static void (*populateHandler)() = 0;
+#endif
+
+#define LUA_MAX_PARAMS 32
+static struct luaPropertiesCommon *paramDefinitions[LUA_MAX_PARAMS] = {0}; // array of luaItem_*
+static luaCallback paramCallbacks[LUA_MAX_PARAMS] = {0};
 static uint8_t lastLuaField = 0;
+static uint8_t nextStatusChunk = 0;
 
-static struct tagLuaDevice luaDevice = {
-    txDeviceName,
-    {{0},0},
-    LUA_DEVICE_SIZE(luaDevice)
-};
+static uint32_t startDeferredTime = 0;
+static uint32_t deferredTimeout = 0;
+static std::function<void()> deferredFunction = nullptr;
 
-#define TYPE(T) (struct T *)p,((struct T *)p)->size
-static uint8_t iterateLUAparams(uint8_t idx, uint8_t chunk)
+static uint8_t luaSelectionOptionMax(const char *strOptions)
 {
-  uint8_t retval = 0;
-  struct tagLuaProperties1 *p = (struct tagLuaProperties1 *)paramDefinitions[idx];
-  if (p != 0) {
-    switch(p->type) {
-      case CRSF_UINT8:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_UINT8,TYPE(tagLuaItem_uint8));
-        break;
-      case CRSF_UINT16:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_UINT16,TYPE(tagLuaItem_uint16));
-        break;
-      case CRSF_STRING:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_STRING,TYPE(tagLuaItem_string));
-        break;
-      case CRSF_INFO:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_INFO,TYPE(tagLuaItem_string));
-        break;
-      case CRSF_COMMAND:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_COMMAND,TYPE(tagLuaItem_command));
-        break;
-      case CRSF_TEXT_SELECTION:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_TEXT_SELECTION,TYPE(tagLuaItem_textSelection));
-        break;
-      case CRSF_FOLDER:
-        retval = crsf.sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY,chunk,CRSF_FOLDER,TYPE(tagLuaItem_folder));
-        break;
-    }
-    if(retval == 0 && idx == lastLuaField){
-      allLUAparamSent = 1;
-    }
-  }
-  return retval;
-}
-#undef TYPE
-
-void sendLuaFieldCrsf(uint8_t idx, uint8_t chunk){
-  if(!allLUAparamSent){
-    iterateLUAparams(idx,chunk);
+  // Returns the max index of the semicolon-delimited option string
+  // e.g. A;B;C;D = 3
+  uint8_t retVal = 0;
+  while (true)
+  {
+    char c = *strOptions++;
+    if (c == ';')
+      ++retVal;
+    else if (c == '\0')
+      return retVal;
   }
 }
 
-void suppressCurrentLuaWarning(void){ //0 to suppress
-  suppressedLuaWarningFlags = ~luaWarningFLags;
+static uint8_t *luaTextSelectionStructToArray(const void *luaStruct, uint8_t *next)
+{
+  const struct luaItem_selection *p1 = (const struct luaItem_selection *)luaStruct;
+  next = (uint8_t *)stpcpy((char *)next, p1->options) + 1;
+  *next++ = p1->value; // value
+  *next++ = 0; // min
+  *next++ = luaSelectionOptionMax(p1->options); //max
+  *next++ = 0; // default value
+  return (uint8_t *)stpcpy((char *)next, p1->units);
 }
 
-bool getLuaWarning(void){ //1 if alarm
-  return luaWarningFLags & suppressedLuaWarningFlags;
+static uint8_t *luaCommandStructToArray(const void *luaStruct, uint8_t *next)
+{
+  const struct luaItem_command *p1 = (const struct luaItem_command *)luaStruct;
+  *next++ = p1->step;
+  *next++ = 200; // timeout in 10ms
+  return (uint8_t *)stpcpy((char *)next, p1->info);
+}
+
+static uint8_t *luaInt8StructToArray(const void *luaStruct, uint8_t *next)
+{
+  const struct luaItem_int8 *p1 = (const struct luaItem_int8 *)luaStruct;
+  memcpy(next, &p1->properties, sizeof(p1->properties));
+  next += sizeof(p1->properties);
+  *next++ = 0; // default value
+  return (uint8_t *)stpcpy((char *)next, p1->units);
+}
+
+static uint8_t *luaInt16StructToArray(const void *luaStruct, uint8_t *next)
+{
+  const struct luaItem_int16 *p1 = (const struct luaItem_int16 *)luaStruct;
+  memcpy(next, &p1->properties, sizeof(p1->properties));
+  next += sizeof(p1->properties);
+  *next++ = 0; // default value byte 1
+  *next++ = 0; // default value byte 2
+  return (uint8_t *)stpcpy((char *)next, p1->units);
+}
+
+static uint8_t *luaStringStructToArray(const void *luaStruct, uint8_t *next)
+{
+  const struct luaItem_string *p1 = (const struct luaItem_string *)luaStruct;
+  return (uint8_t *)stpcpy((char *)next, p1->value);
+}
+
+static uint8_t sendCRSFparam(crsf_frame_type_e frameType, uint8_t fieldChunk, struct luaPropertiesCommon *luaData)
+{
+  uint8_t dataType = luaData->type & CRSF_FIELD_TYPE_MASK;
+
+  // 256 max payload + (FieldID + ChunksRemain + Parent + Type)
+  // Chunk 1: (FieldID + ChunksRemain + Parent + Type) + fieldChunk0 data
+  // Chunk 2-N: (FieldID + ChunksRemain) + fieldChunk1 data
+  uint8_t chunkBuffer[256+4];
+  // Start the field payload at 2 to leave room for (FieldID + ChunksRemain)
+  chunkBuffer[2] = luaData->parent;
+  chunkBuffer[3] = dataType;
+#ifdef TARGET_TX
+  // Set the hidden flag
+  chunkBuffer[3] |= luaData->type & CRSF_FIELD_HIDDEN ? 0x80 : 0;
+  if (crsf.elrsLUAmode) {
+    chunkBuffer[3] |= luaData->type & CRSF_FIELD_ELRS_HIDDEN ? 0x80 : 0;
+  }
+#else
+  chunkBuffer[3] |= luaData->type;
+  uint8_t paramInformation[DEVICE_INFORMATION_LENGTH];
+#endif
+
+  // Copy the name to the buffer starting at chunkBuffer[4]
+  uint8_t *chunkStart = (uint8_t *)stpcpy((char *)&chunkBuffer[4], luaData->name) + 1;
+
+  uint8_t *dataEnd;
+  switch(dataType) {
+    case CRSF_TEXT_SELECTION:
+      dataEnd = luaTextSelectionStructToArray(luaData, chunkStart);
+      break;
+    case CRSF_COMMAND:
+      dataEnd = luaCommandStructToArray(luaData, chunkStart);
+      break;
+    case CRSF_INT8: // fallthrough
+    case CRSF_UINT8:
+      dataEnd = luaInt8StructToArray(luaData, chunkStart);
+      break;
+    case CRSF_INT16: // fallthrough
+    case CRSF_UINT16:
+      dataEnd = luaInt16StructToArray(luaData, chunkStart);
+      break;
+    case CRSF_STRING: // fallthough
+    case CRSF_INFO:
+      dataEnd = luaStringStructToArray(luaData, chunkStart);
+      break;
+    case CRSF_FOLDER:
+      // Nothing to do, the name is all there is
+      // but subtract 1 because dataSize expects the end to not include the null
+      // which is already accounted for in chunkStart
+      dataEnd = chunkStart - 1;
+      break;
+    case CRSF_FLOAT:
+    case CRSF_OUT_OF_RANGE:
+    default:
+      return 0;
+  }
+
+  // dataEnd points to the end of the last string
+  // -2 bytes Lua chunk header: FieldId, ChunksRemain
+  // +1 for the null on the last string
+  uint8_t dataSize = (dataEnd - chunkBuffer) - 2 + 1;
+  // Maximum number of chunked bytes that can be sent in one response
+  // 6 bytes CRSF header/CRC: Dest, Len, Type, ExtSrc, ExtDst, CRC
+  // 2 bytes Lua chunk header: FieldId, ChunksRemain
+#ifdef TARGET_TX
+  uint8_t chunkMax = CRSF::GetMaxPacketBytes() - 6 - 2;
+#else
+  uint8_t chunkMax = CRSF_MAX_PACKET_LEN - 6 - 2;
+#endif
+  // How many chunks needed to send this field (rounded up)
+  uint8_t chunkCnt = (dataSize + chunkMax - 1) / chunkMax;
+  // Data left to send is adjustedSize - chunks sent already
+  uint8_t chunkSize = min((uint8_t)(dataSize - (fieldChunk * chunkMax)), chunkMax);
+
+  // Move chunkStart back 2 bytes to add (FieldId + ChunksRemain) to each packet
+  chunkStart = &chunkBuffer[fieldChunk * chunkMax];
+  chunkStart[0] = luaData->id;                 // FieldId
+  chunkStart[1] = chunkCnt - (fieldChunk + 1); // ChunksRemain
+#ifdef TARGET_TX
+  CRSF::packetQueueExtended(frameType, chunkStart, chunkSize + 2);
+#else
+  memcpy(paramInformation + sizeof(crsf_ext_header_t),chunkStart,chunkSize + 2);
+
+  crsf.SetExtendedHeaderAndCrc(paramInformation, frameType, chunkSize + CRSF_FRAME_LENGTH_EXT_TYPE_CRC + 2, CRSF_ADDRESS_CRSF_RECEIVER, CRSF_ADDRESS_CRSF_TRANSMITTER);
+
+  telemetry.AppendTelemetryPackage(paramInformation);
+#endif
+  return chunkCnt - (fieldChunk+1);
+}
+
+static void pushResponseChunk(struct luaItem_command *cmd) {
+  DBGVLN("sending response for [%s] chunk=%u step=%u", cmd->common.name, nextStatusChunk, cmd->step);
+  if (sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY, nextStatusChunk, (struct luaPropertiesCommon *)cmd) == 0) {
+    nextStatusChunk = 0;
+  } else {
+    nextStatusChunk++;
+  }
+}
+
+void sendLuaCommandResponse(struct luaItem_command *cmd, luaCmdStep_e step, const char *message) {
+  cmd->step = step;
+  cmd->info = message;
+  nextStatusChunk = 0;
+  pushResponseChunk(cmd);
+}
+
+#ifdef TARGET_TX
+static void luaSupressCriticalErrors()
+{
+  // clear the critical error bits of the warning flags
+  luaWarningFlags &= 0b00011111;
+}
+
+void setLuaWarningFlag(lua_Flags flag, bool value)
+{
+  if (value)
+  {
+    luaWarningFlags |= 1 << (uint8_t)flag;
+  }
+  else
+  {
+    luaWarningFlags &= ~(1 << (uint8_t)flag);
+  }
+}
+
+static void updateElrsFlags()
+{
+  setLuaWarningFlag(LUA_FLAG_MODEL_MATCH, connectionState == connected && connectionHasModelMatch == false);
+  setLuaWarningFlag(LUA_FLAG_CONNECTED, connectionState == connected);
+  setLuaWarningFlag(LUA_FLAG_ISARMED, IsArmed());
 }
 
 void sendELRSstatus()
 {
-  uint8_t luaParams[] = {(uint8_t)crsf.BadPktsCountResult,
-                         (uint8_t)((crsf.GoodPktsCountResult & 0xFF00) >> 8),
-                         (uint8_t)(crsf.GoodPktsCountResult & 0xFF),
-                         (uint8_t)(getLuaWarning())};
+  constexpr const char *messages[] = { //higher order = higher priority
+    "",                   //status2 = connected status
+    "",                   //status1, reserved for future use
+    "Model Mismatch",     //warning3, model mismatch
+    "[ ! Armed ! ]",      //warning2, AUX1 high / armed
+    "",           //warning1, reserved for future use
+    "Not while connected",  //critical warning3, trying to change a protected value while connected
+    "",  //critical warning2, reserved for future use
+    ""   //critical warning1, reserved for future use
+  };
+  const char * warningInfo = "";
 
-  crsf.sendELRSparam(luaParams,4, 0x2E, getLuaWarning() ? "beta" : " ", 4); //*elrsinfo is the info that we want to pass when there is getluawarning()
-}
+  for (int i=7 ; i>=0 ; i--)
+  {
+      if (luaWarningFlags & (1<<i))
+      {
+          warningInfo = messages[i];
+          break;
+      }
+  }
+  uint8_t buffer[sizeof(tagLuaElrsParams) + strlen(warningInfo) + 1];
+  struct tagLuaElrsParams * const params = (struct tagLuaElrsParams *)buffer;
 
-void ICACHE_RAM_ATTR luaParamUpdateReq()
-{
-  UpdateParamReq = true;
-}
-
-void registerLUAParameter(void *definition, luaCallback callback, uint8_t parent)
-{
-  struct tagLuaProperties1 *p = (struct tagLuaProperties1 *)definition;
-  lastLuaField++;
-  p->id = lastLuaField;
-  p->parent = parent;
-  paramDefinitions[p->id] = definition;
-  paramCallbacks[p->id] = callback;
-  luaDevice.luaDeviceProperties.fieldamount = lastLuaField;
+  params->pktsBad = crsf.BadPktsCountResult;
+  params->pktsGood = htobe16(crsf.GoodPktsCountResult);
+  params->flags = luaWarningFlags;
+  // to support sending a params.msg, buffer should be extended by the strlen of the message
+  // and copied into params->msg (with trailing null)
+  strcpy(params->msg, warningInfo);
+  crsf.packetQueueExtended(0x2E, &buffer, sizeof(buffer));
 }
 
 void registerLUAPopulateParams(void (*populate)())
@@ -110,17 +265,59 @@ void registerLUAPopulateParams(void (*populate)())
   populate();
 }
 
-bool luaHandleUpdateParameter()
-{
-  static uint32_t LUAfieldReported = 0;
+#endif
 
-  if (millis() >= (uint32_t)(LUA_PKTCOUNT_INTERVAL_MS + LUAfieldReported)){
-      LUAfieldReported = millis();
-      allLUAparamSent = 0;
-      populateHandler();
-      sendELRSstatus();
+void ICACHE_RAM_ATTR luaParamUpdateReq()
+{
+  UpdateParamReq = true;
+}
+
+void registerLUAParameter(void *definition, luaCallback callback, uint8_t parent)
+{
+  if (definition == nullptr)
+  {
+    static uint8_t agentLiteFolder[4+LUA_MAX_PARAMS+2] = "HooJ";
+    static struct luaItem_folder luaAgentLite = {
+        {(const char *)agentLiteFolder, CRSF_FOLDER},
+    };
+
+    paramDefinitions[0] = (struct luaPropertiesCommon *)&luaAgentLite;
+    paramCallbacks[0] = 0;
+    uint8_t *pos = agentLiteFolder + 4;
+    for (int i=1;i<=lastLuaField;i++)
+    {
+      if (paramDefinitions[i]->parent == 0)
+      {
+        *pos++ = i;
+      }
+    }
+    *pos++ = 0xFF;
+    *pos++ = 0;
+    return;
   }
 
+  struct luaPropertiesCommon *p = (struct luaPropertiesCommon *)definition;
+  lastLuaField++;
+  p->id = lastLuaField;
+  p->parent = parent;
+  paramDefinitions[lastLuaField] = p;
+  paramCallbacks[lastLuaField] = callback;
+}
+
+void deferExecution(uint32_t ms, std::function<void()> f)
+{
+  startDeferredTime = millis();
+  deferredTimeout = ms;
+  deferredFunction = f;
+}
+
+bool luaHandleUpdateParameter()
+{
+  if (deferredFunction!=nullptr && (millis() - startDeferredTime) > deferredTimeout)
+  {
+    deferredFunction();
+    deferredFunction = nullptr;
+  }
   if (UpdateParamReq == false)
   {
     return false;
@@ -129,55 +326,79 @@ bool luaHandleUpdateParameter()
   switch(crsf.ParameterUpdateData[0])
   {
     case CRSF_FRAMETYPE_PARAMETER_WRITE:
-      allLUAparamSent = 0;
       if (crsf.ParameterUpdateData[1] == 0)
       {
-        // special case for sending commit packet
-        DBGVLN("send all lua params");
+        // special case for elrs linkstat request
+#ifdef TARGET_TX
+        DBGVLN("ELRS status request");
+        updateElrsFlags();
         sendELRSstatus();
       } else if (crsf.ParameterUpdateData[1] == 0x2E) {
-        suppressCurrentLuaWarning();
+        luaSupressCriticalErrors();
+#endif
       } else {
-        uint8_t param = crsf.ParameterUpdateData[1];
-        if (param < 32 && paramCallbacks[param] != 0) {
-          paramCallbacks[param](param, crsf.ParameterUpdateData[2]);
+        uint8_t id = crsf.ParameterUpdateData[1];
+        uint8_t arg = crsf.ParameterUpdateData[2];
+        struct luaPropertiesCommon *p = paramDefinitions[id];
+        DBGLN("Set Lua [%s]=%u", p->name, arg);
+        if (id < LUA_MAX_PARAMS && paramCallbacks[id]) {
+          // While the command is executing, the handset will send `WRITE state=lcsQuery`.
+          // paramCallbacks will set the value when nextStatusChunk == 0, or send any
+          // remaining chunks when nextStatusChunk != 0
+          if (arg == lcsQuery && nextStatusChunk != 0) {
+            pushResponseChunk((struct luaItem_command *)p);
+          } else {
+            paramCallbacks[id](p, arg);
+          }
         }
       }
       break;
 
     case CRSF_FRAMETYPE_DEVICE_PING:
-        allLUAparamSent = 0;
+#ifdef TARGET_TX
         populateHandler();
-        crsf.sendCRSFdevice(&luaDevice,luaDevice.size);
+        luaSupressCriticalErrors();
+#endif
+        sendLuaDevicePacket();
         break;
 
-    case CRSF_FRAMETYPE_PARAMETER_READ: //param info
-      sendLuaFieldCrsf(crsf.ParameterUpdateData[1], crsf.ParameterUpdateData[2]);
+    case CRSF_FRAMETYPE_PARAMETER_READ:
+      {
+        uint8_t fieldId = crsf.ParameterUpdateData[1];
+        uint8_t fieldChunk = crsf.ParameterUpdateData[2];
+        DBGVLN("Read lua param %u %u", fieldId, fieldChunk);
+        if (fieldId < LUA_MAX_PARAMS && paramDefinitions[fieldId])
+        {
+          struct luaItem_command *field = (struct luaItem_command *)paramDefinitions[fieldId];
+          uint8_t dataType = field->common.type & CRSF_FIELD_TYPE_MASK;
+          // On first chunk of a command, reset the step/info of the command
+          if (dataType == CRSF_COMMAND && fieldChunk == 0)
+          {
+            field->step = lcsIdle;
+            field->info = "";
+          }
+          sendCRSFparam(CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY, fieldChunk, &field->common);
+        }
+      }
       break;
+
+    default:
+      DBGLN("Unknown LUA %x", crsf.ParameterUpdateData[0]);
   }
 
   UpdateParamReq = false;
   return true;
 }
-void sendLuaDevicePacket(void){
-  crsf.sendCRSFdevice(&luaDevice,luaDevice.size);
-}
-void setLuaTextSelectionValue(struct tagLuaItem_textSelection *luaStruct, uint8_t newvalue){
-    luaStruct->luaProperties2.value = newvalue;
-}
-void setLuaCommandValue(struct tagLuaItem_command *luaStruct, uint8_t newvalue){
-    luaStruct->luaProperties2.status = newvalue;
-}
-void setLuaUint8Value(struct tagLuaItem_uint8 *luaStruct, uint8_t newvalue){
-    luaStruct->luaProperties2.value = newvalue;
-}
-void setLuaUint16Value(struct tagLuaItem_uint16 *luaStruct, uint16_t newvalue){
-    luaStruct->luaProperties2.value = (newvalue >> 8) | (newvalue << 8);
-}
-void setLuaStringValue(struct tagLuaItem_string *luaStruct,const char *newvalue){
-    luaStruct->label2 = newvalue;
-}
-void setLuaCommandInfo(struct tagLuaItem_command *luaStruct,const char *newvalue){
-    luaStruct->label2 = newvalue;
-}
+
+void sendLuaDevicePacket(void)
+{
+  uint8_t deviceInformation[DEVICE_INFORMATION_LENGTH];
+  crsf.GetDeviceInformation(deviceInformation, lastLuaField);
+  // does append header + crc again so substract size from length
+#ifdef TARGET_TX
+  crsf.packetQueueExtended(CRSF_FRAMETYPE_DEVICE_INFO, deviceInformation + sizeof(crsf_ext_header_t), DEVICE_INFORMATION_PAYLOAD_LENGTH);
+#else
+  crsf.SetExtendedHeaderAndCrc(deviceInformation, CRSF_FRAMETYPE_DEVICE_INFO, DEVICE_INFORMATION_FRAME_SIZE, CRSF_ADDRESS_CRSF_RECEIVER, CRSF_ADDRESS_CRSF_TRANSMITTER);
+  telemetry.AppendTelemetryPackage(deviceInformation);
 #endif
+}

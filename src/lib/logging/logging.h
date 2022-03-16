@@ -1,6 +1,8 @@
 #ifndef DEBUG_H
 #define DEBUG_H
 
+#include "VA_OPT.h"
+
 /**
  * Debug logging macros. Define DEBUG_LOG or DEBUG_LOG_VERBOSE to enable logging,
  * verbose adds overwhelming detail. All macros start with DBG or DBGV (for verbose)
@@ -8,11 +10,21 @@
  * DBG / DBGV - Print messag with optional format specifier (Serial.printf(x, ...))
  * DBGLN / DBGVLN - Same as DBG except also includes newline
  * DBGW / DBGVW - Write a single byte to logging (Serial.write(x))
- * 
+ *
  * Set LOGGING_UART define to Serial instance to use if not Serial
  **/
 
-#ifndef LOGGING_UART
+// DEBUG_LOG_VERBOSE and DEBUG_RX_SCOREBOARD implies DEBUG_LOG
+#if !defined(DEBUG_LOG)
+  #if defined(DEBUG_LOG_VERBOSE) || defined(DEBUG_RX_SCOREBOARD)
+    #define DEBUG_LOG
+  #endif
+#endif
+
+#if defined(TARGET_TX)
+extern Stream *LoggingBackpack;
+#define LOGGING_UART (*LoggingBackpack)
+#else
 #define LOGGING_UART Serial
 #endif
 
@@ -20,13 +32,23 @@
 
 extern void debugPrintf(const char* fmt, ...);
 
-#define INFOLN(msg, ...) { \
-  debugPrintf(msg, ##__VA_ARGS__); \
-  LOGGING_UART.println(); \
-}
-#define ERRLN(msg) LOGGING_UART.println("ERROR: " msg)
+#if defined(CRSF_RCVR_NO_SERIAL) && !defined(DEBUG_LOG)
+  #define INFOLN(msg, ...)
+  #define ERRLN(msg)
+#else
+  #define INFOLN(msg, ...) { \
+      debugPrintf(msg, ##__VA_ARGS__); \
+      LOGGING_UART.println(); \
+    }
 
-#if defined(DEBUG_LOG) || defined(DEBUG_LOG_VERBOSE)
+  #define ERRLN(msg, ...) IFNE(__VA_ARGS__)({ \
+      LOGGING_UART.print("ERROR: "); \
+      debugPrintf(msg, ##__VA_ARGS__); \
+      LOGGING_UART.println(); \
+  })(LOGGING_UART.println("ERROR: " msg))
+#endif
+
+#if defined(DEBUG_LOG)
   #define DBGCR   LOGGING_UART.println()
   #define DBGW(c) LOGGING_UART.write(c)
   #ifndef LOG_USE_PROGMEM

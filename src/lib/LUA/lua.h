@@ -1,35 +1,154 @@
 #pragma once
 
-#ifdef TARGET_TX
 
 #include "targets.h"
 #include "crsf_protocol.h"
+#include <functional>
 
-#define LUA_DEVICE_SIZE(X) (uint8_t)(sizeof(tagLuaDeviceProperties)+strlen(X.label1)+1)
-#define LUA_TEXTSELECTION_SIZE(X) (uint8_t)(4+strlen(X.label1)+1+strlen(X.textOption)+1+sizeof(tagLuaTextSelectionProperties)+1+strlen(X.label2)+1)
-#define LUA_COMMAND_SIZE(X) (uint8_t)(4+strlen(X.label1)+1+sizeof(tagLuaCommandProperties)+strlen(X.label2)+1)
-#define LUA_UINT8_SIZE(X) (uint8_t)(4+strlen(X.label1)+1+sizeof(tagLuaUint8Properties)+1+strlen(X.label2)+1)
-#define LUA_UINT16_SIZE(X) (uint8_t)(4+strlen(X.label1)+1+sizeof(tagLuaUint16Properties)+2+strlen(X.label2)+1)
-#define LUA_STRING_SIZE(X) (uint8_t)(4+strlen(X.label1)+1+strlen(X.label2)+1)
-#define LUA_FOLDER_SIZE(X) (uint8_t)(4+strlen(X.label1)+1)
+enum lua_Flags{
+    //bit 0 and 1 are status flags, show up as the little icon in the lua top right corner
+    LUA_FLAG_CONNECTED = 0,
+    LUA_FLAG_STATUS1,
+    //bit 2,3,4 are warning flags, change the tittle bar every 0.5s
+    LUA_FLAG_MODEL_MATCH,
+    LUA_FLAG_ISARMED,
+    LUA_FLAG_WARNING1,
+    //bit 5,6,7 are critical warning flag, block the lua screen until user confirm to suppress the warning.
+    LUA_FLAG_ERROR_CONNECTED,
+    LUA_FLAG_CRITICAL_WARNING1,
+    LUA_FLAG_CRITICAL_WARNING2,
+};
 
-extern void sendLuaFieldCrsf(uint8_t idx, uint8_t chunk);
+struct luaPropertiesCommon {
+    const char* const name;    // display name
+    const crsf_value_type_e type;
+    uint8_t id;         // Sequential id assigned by enumeration
+    uint8_t parent;     // id of parent folder
+} PACKED;
 
-extern void suppressCurrentLuaWarning(void);
-extern bool getLuaWarning(void);
-extern void ICACHE_RAM_ATTR luaParamUpdateReq();
-extern bool luaHandleUpdateParameter();
+struct tagLuaDeviceProperties {
+    uint32_t serialNo;
+    uint32_t hardwareVer;
+    uint32_t softwareVer;
+    uint8_t fieldCnt; //number of field of params this device has
+}PACKED;
+
+struct luaItem_selection {
+    struct luaPropertiesCommon common;
+    uint8_t value;
+    const char* options; // selection options, separated by ';'
+    const char* const units;
+} PACKED;
+
+enum luaCmdStep_e : uint8_t {
+    lcsIdle = 0,
+    lcsClick = 1,       // user has clicked the command to execute
+    lcsExecuting = 2,   // command is executing
+    lcsAskConfirm = 3,  // command pending user OK
+    lcsConfirmed = 4,   // user has confirmed
+    lcsCancel = 5,      // user has requested cancel
+    lcsQuery = 6,       // UI is requesting status update
+};
+
+struct luaItem_command {
+    struct luaPropertiesCommon common;
+    luaCmdStep_e step;      // state
+    const char *info;       // status info to display
+} PACKED;
+
+struct luaPropertiesInt8 {
+    union {
+        struct {
+            int8_t value;
+            const int8_t min;
+            const int8_t max;
+        } s;
+        struct {
+            uint8_t value;
+            const uint8_t min;
+            const uint8_t max;
+        } u;
+    };
+} PACKED;
+
+struct luaItem_int8 {
+    struct luaPropertiesCommon common;
+    struct luaPropertiesInt8 properties;
+    const char* const units;
+} PACKED;
+
+struct luaPropertiesInt16 {
+    union {
+        struct {
+            int16_t value;
+            const int16_t min;
+            const int16_t max;
+        } s;
+        struct {
+            uint16_t value;
+            const uint16_t min;
+            const uint16_t max;
+        } u;
+    };
+}PACKED;
+
+struct luaItem_int16 {
+    struct luaPropertiesCommon common;
+    struct luaPropertiesInt16 properties;
+    const char* const units;
+} PACKED;
+
+struct luaItem_string {
+    const struct luaPropertiesCommon common;
+    const char* value;
+} PACKED;
+
+struct luaItem_folder {
+    const struct luaPropertiesCommon common;
+} PACKED;
+
+struct tagLuaElrsParams {
+    uint8_t pktsBad;
+    uint16_t pktsGood; // Big-Endian
+    uint8_t flags;
+    char msg[1]; // null-terminated string
+} PACKED;
+
+#ifdef TARGET_TX
+void setLuaWarningFlag(lua_Flags flag, bool value);
+uint8_t getLuaWarningFlags(void);
 
 void registerLUAPopulateParams(void (*populate)());
+#endif
 
-typedef void (*luaCallback)(uint8_t id, uint8_t arg);
-void registerLUAParameter(void *definition, luaCallback callback = 0, uint8_t parent = 0);
+void sendLuaCommandResponse(struct luaItem_command *cmd, luaCmdStep_e step, const char *message);
+
+extern void ICACHE_RAM_ATTR luaParamUpdateReq();
+extern bool luaHandleUpdateParameter();
+extern void deferExecution(uint32_t ms, std::function<void()> f);
+
+typedef void (*luaCallback)(struct luaPropertiesCommon *item, uint8_t arg);
+void registerLUAParameter(void *definition, luaCallback callback = nullptr, uint8_t parent = 0);
 
 void sendLuaDevicePacket(void);
-void setLuaTextSelectionValue(struct tagLuaItem_textSelection *textSelectionStruct, uint8_t newvalue);
-void setLuaCommandValue(struct tagLuaItem_command *textSelectionStruct, uint8_t newvalue);
-void setLuaUint8Value(struct tagLuaItem_uint8 *luaStruct, uint8_t newvalue);
-void setLuaUint16Value(struct tagLuaItem_uint16 *luaStruct, uint16_t newvalue);
-void setLuaStringValue(struct tagLuaItem_string *luaStruct,const char *newvalue);
-void setLuaCommandInfo(struct tagLuaItem_command *luaStruct,const char *newvalue);
-#endif
+inline void setLuaTextSelectionValue(struct luaItem_selection *luaStruct, uint8_t newvalue) {
+    luaStruct->value = newvalue;
+}
+inline void setLuaUint8Value(struct luaItem_int8 *luaStruct, uint8_t newvalue) {
+    luaStruct->properties.u.value = newvalue;
+}
+inline void setLuaInt8Value(struct luaItem_int8 *luaStruct, int8_t newvalue) {
+    luaStruct->properties.s.value = newvalue;
+}
+inline void setLuaUint16Value(struct luaItem_int16 *luaStruct, uint16_t newvalue) {
+    luaStruct->properties.u.value = (newvalue >> 8) | (newvalue << 8);
+}
+inline void setLuaInt16Value(struct luaItem_int16 *luaStruct, int16_t newvalue) {
+    luaStruct->properties.s.value = (newvalue >> 8) | (newvalue << 8);
+}
+inline void setLuaStringValue(struct luaItem_string *luaStruct, const char *newvalue) {
+    luaStruct->value = newvalue;
+}
+
+#define LUASYM_ARROW_UP "\xc0"
+#define LUASYM_ARROW_DN "\xc1"

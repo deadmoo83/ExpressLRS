@@ -2,18 +2,8 @@
 #include "logging.h"
 
 SX127xHal hal;
-
-void inline SX127xDriver::nullCallback(void) {}
 SX127xDriver *SX127xDriver::instance = NULL;
 
-void (*SX127xDriver::RXdoneCallback)() = &nullCallback;
-void (*SX127xDriver::TXdoneCallback)() = &nullCallback;
-
-void (*SX127xDriver::TXtimeout)() = &nullCallback;
-void (*SX127xDriver::RXtimeout)() = &nullCallback;
-
-volatile WORD_ALIGNED_ATTR uint8_t SX127xDriver::TXdataBuffer[TXRXBuffSize] = {0};
-volatile WORD_ALIGNED_ATTR uint8_t SX127xDriver::RXdataBuffer[TXRXBuffSize] = {0};
 
 const uint8_t SX127x_AllowedSyncwords[105] =
     {0, 5, 6, 7, 11, 12, 13, 15, 18,
@@ -32,16 +22,17 @@ const uint8_t SX127x_AllowedSyncwords[105] =
 
 //////////////////////////////////////////////
 
-SX127xDriver::SX127xDriver()
+SX127xDriver::SX127xDriver(): SX12xxDriverCommon()
 {
   instance = this;
+  PayloadLength = 8; // Dummy default value which is overwritten during setup.
+  currFreq = 0; // leave as 0 to ensure that it gets set
 }
 
 bool SX127xDriver::Begin()
 {
   DBGLN("SX127x Driver Begin");
-  hal.TXdoneCallback = &TXnbISR;
-  hal.RXdoneCallback = &RXnbISR;
+  hal.IsrCallback = &SX127xDriver::IsrCallback;
   hal.init();
 
   if (DetectChip())
@@ -57,22 +48,18 @@ bool SX127xDriver::Begin()
 
 void SX127xDriver::End()
 {
+  SetMode(SX127x_OPMODE_SLEEP);
   hal.end();
-  instance->TXdoneCallback = &nullCallback; // remove callbacks
-  instance->RXdoneCallback = &nullCallback;
+  RemoveCallbacks();
 }
 
 void SX127xDriver::ConfigLoraDefaults()
 {
-  DBGLN("Setting ExpressLRS LoRa reg defaults");
-
   hal.writeRegister(SX127X_REG_OP_MODE, SX127x_OPMODE_SLEEP);
   hal.writeRegister(SX127X_REG_OP_MODE, ModFSKorLoRa); //must be written in sleep mode
   SetMode(SX127x_OPMODE_STANDBY);
 
-  instance->ClearIRQFlags();
-
-  hal.writeRegister(SX127X_REG_PAYLOAD_LENGTH, instance->PayloadLength);
+  hal.writeRegister(SX127X_REG_PAYLOAD_LENGTH, PayloadLength);
   SetSyncWord(currSyncWord);
   hal.writeRegister(SX127X_REG_FIFO_TX_BASE_ADDR, SX127X_FIFO_TX_BASE_ADDR_MAX);
   hal.writeRegister(SX127X_REG_FIFO_RX_BASE_ADDR, SX127X_FIFO_RX_BASE_ADDR_MAX);
@@ -160,8 +147,8 @@ void SX127xDriver::SetSyncWord(uint8_t syncWord)
 
 void SX127xDriver::SetOutputPower(uint8_t Power)
 {
-  instance->SetMode(SX127x_OPMODE_STANDBY);
-  #ifdef TARGET_TX_BETAFPV_900_V1
+  SetMode(SX127x_OPMODE_STANDBY);
+  #if defined(USE_SX1276_RFO_HF)
     hal.writeRegister(SX127X_REG_PA_CONFIG, SX127X_PA_SELECT_RFO | SX127X_MAX_OUTPUT_POWER | Power);
   #else
     hal.writeRegister(SX127X_REG_PA_CONFIG, SX127X_PA_SELECT_BOOST | SX127X_MAX_OUTPUT_POWER | Power);
@@ -227,6 +214,44 @@ void ICACHE_RAM_ATTR SX127xDriver::SetFrequencyReg(uint32_t freq)
   hal.writeRegisterBurst(SX127X_REG_FRF_MSB, outbuff, sizeof(outbuff));
 }
 
+void ICACHE_RAM_ATTR SX127xDriver::SetRxTimeoutUs(uint32_t interval)
+{
+  timeoutSymbols = 0; // no timeout i.e. use continuous mode
+  if (interval)
+  {
+    unsigned int spread = 0;
+    switch (currSF)
+    {
+    case SX127x_SF_6:
+      spread = 6;
+      break;
+    case SX127x_SF_7:
+      spread = 7;
+      break;
+    case SX127x_SF_8:
+      spread = 8;
+      break;
+    case SX127x_SF_9:
+      spread = 9;
+      break;
+    case SX127x_SF_10:
+      spread = 10;
+      break;
+    case SX127x_SF_11:
+      spread = 11;
+      break;
+    case SX127x_SF_12:
+      spread = 12;
+      break;
+    }
+    uint32_t symbolTimeUs = ((uint32_t)(1 << spread)) * 1000000 / GetCurrBandwidth();
+    timeoutSymbols = interval / symbolTimeUs;
+    hal.setRegValue(SX127X_REG_MODEM_CONFIG_2, timeoutSymbols >> 8, 1, 0);  // set the timeout MSB
+    hal.setRegValue(SX127X_REG_SYMB_TIMEOUT_LSB, timeoutSymbols & 0xFF);
+    DBGLN("SetRxTimeout(%u), symbolTime=%uus symbols=%u", interval, (uint32_t)symbolTimeUs, timeoutSymbols)
+  }
+}
+
 bool SX127xDriver::DetectChip()
 {
   uint8_t i = 0;
@@ -264,56 +289,65 @@ bool SX127xDriver::DetectChip()
 
 void ICACHE_RAM_ATTR SX127xDriver::TXnbISR()
 {
-  //hal.TXRXdisable();
-  instance->ClearIRQFlags();
-  instance->currOpmode = SX127x_OPMODE_STANDBY; //goes into standby after transmission
-  //instance->TXdoneMicros = micros();
+  currOpmode = SX127x_OPMODE_STANDBY; //goes into standby after transmission
+  //TXdoneMicros = micros();
   TXdoneCallback();
 }
 
 void ICACHE_RAM_ATTR SX127xDriver::TXnb()
 {
-  // if (instance->currOpmode == SX127x_OPMODE_TX)
+  // if (currOpmode == SX127x_OPMODE_TX)
   // {
   //   DBGLN("abort TX");
   //   return; // we were already TXing so abort. this should never happen!!!
   // }
-  instance->ClearIRQFlags();
-  instance->SetMode(SX127x_OPMODE_STANDBY);
+  SetMode(SX127x_OPMODE_STANDBY);
+
   hal.TXenable();
-
-  //instance->TXstartMicros = micros();
-  //instance->HeadRoom = instance->TXstartMicros - instance->TXdoneMicros;
-
   hal.writeRegister(SX127X_REG_FIFO_ADDR_PTR, SX127X_FIFO_TX_BASE_ADDR_MAX);
-  hal.writeRegisterFIFO(instance->TXdataBuffer, instance->PayloadLength);
+  hal.writeRegisterFIFO(TXdataBuffer, PayloadLength);
 
-  instance->SetMode(SX127x_OPMODE_TX);
+  SetMode(SX127x_OPMODE_TX);
 }
 
 ///////////////////////////////////RX Functions Non-Blocking///////////////////////////////////////////
 
 void ICACHE_RAM_ATTR SX127xDriver::RXnbISR()
 {
-  instance->ClearIRQFlags();
-  hal.readRegisterFIFO(instance->RXdataBuffer, instance->PayloadLength);
-  instance->LastPacketRSSI = instance->GetLastPacketRSSI();
-  instance->LastPacketSNR = instance->GetLastPacketSNR();
-  RXdoneCallback();
+  hal.readRegisterFIFO(RXdataBuffer, PayloadLength);
+  if (timeoutSymbols)
+  {
+    // From page 42 of the datasheet rev 7
+    // In Rx Single mode, the device will return to Standby mode as soon as the interrupt occurs
+    currOpmode = SX127x_OPMODE_STANDBY;
+  }
+  LastPacketRSSI = GetLastPacketRSSI();
+  LastPacketSNR = GetLastPacketSNR();
+  // https://www.mouser.com/datasheet/2/761/sx1276-1278113.pdf
+  // page 87 (note we already do /4 in GetLastPacketSNR())
+  int8_t negOffset = (LastPacketSNR < 0) ? LastPacketSNR : 0;
+  LastPacketRSSI += negOffset;
+  RXdoneCallback(SX12XX_RX_OK);
 }
 
 void ICACHE_RAM_ATTR SX127xDriver::RXnb()
 {
-  // if (instance->currOpmode == SX127x_OPMODE_RXCONTINUOUS)
+  // if (currOpmode == SX127x_OPMODE_RXCONTINUOUS)
   // {
   //   DBGLN("abort RX");
   //   return; // we were already TXing so abort
   // }
-  instance->ClearIRQFlags();
-  instance->SetMode(SX127x_OPMODE_STANDBY);
+  SetMode(SX127x_OPMODE_STANDBY);
   hal.RXenable();
   hal.writeRegister(SX127X_REG_FIFO_ADDR_PTR, SX127X_FIFO_RX_BASE_ADDR_MAX);
-  instance->SetMode(SX127x_OPMODE_RXCONTINUOUS);
+  if (timeoutSymbols)
+  {
+    SetMode(SX127x_OPMODE_RXSINGLE);
+  }
+  else
+  {
+    SetMode(SX127x_OPMODE_RXCONTINUOUS);
+  }
 }
 
 void ICACHE_RAM_ATTR SX127xDriver::SetMode(SX127x_RadioOPmodes mode)
@@ -325,21 +359,22 @@ void ICACHE_RAM_ATTR SX127xDriver::SetMode(SX127x_RadioOPmodes mode)
   }
 }
 
-void SX127xDriver::Config(SX127x_Bandwidth bw, SX127x_SpreadingFactor sf, SX127x_CodingRate cr, uint32_t freq, uint8_t preambleLen, bool InvertIQ, uint8_t PayloadLength)
+void SX127xDriver::Config(uint8_t bw, uint8_t sf, uint8_t cr, uint32_t freq, uint8_t preambleLen, bool InvertIQ, uint8_t PayloadLength, uint32_t interval)
 {
-  Config(bw, sf, cr, freq, preambleLen, currSyncWord, InvertIQ, PayloadLength);
+  Config(bw, sf, cr, freq, preambleLen, currSyncWord, InvertIQ, PayloadLength, interval);
 }
 
-void SX127xDriver::Config(SX127x_Bandwidth bw, SX127x_SpreadingFactor sf, SX127x_CodingRate cr, uint32_t freq, uint8_t preambleLen, uint8_t syncWord, bool InvertIQ, uint8_t PayloadLength)
+void SX127xDriver::Config(uint8_t bw, uint8_t sf, uint8_t cr, uint32_t freq, uint8_t preambleLen, uint8_t syncWord, bool InvertIQ, uint8_t PayloadLength, uint32_t interval)
 {
-  instance->PayloadLength = PayloadLength;
+  PayloadLength = PayloadLength;
   IQinverted = InvertIQ;
   ConfigLoraDefaults();
   SetPreambleLength(preambleLen);
   SetOutputPower(currPWR);
-  SetSpreadingFactor(sf);
-  SetBandwidthCodingRate(bw, cr);
+  SetSpreadingFactor((SX127x_SpreadingFactor)sf);
+  SetBandwidthCodingRate((SX127x_Bandwidth)bw, (SX127x_CodingRate)cr);
   SetFrequencyReg(freq);
+  SetRxTimeoutUs(interval);
 }
 
 uint32_t ICACHE_RAM_ATTR SX127xDriver::GetCurrBandwidth()
@@ -457,17 +492,22 @@ int8_t ICACHE_RAM_ATTR SX127xDriver::GetLastPacketSNR()
   return (rawSNR / 4);
 }
 
-void ICACHE_RAM_ATTR SX127xDriver::ClearIRQFlags()
+uint8_t ICACHE_RAM_ATTR SX127xDriver::GetIrqFlags()
+{
+  return hal.getRegValue(SX127X_REG_IRQ_FLAGS);
+}
+
+void ICACHE_RAM_ATTR SX127xDriver::ClearIrqFlags()
 {
   hal.writeRegister(SX127X_REG_IRQ_FLAGS, 0b11111111);
 }
 
 // int16_t MeasureNoiseFloor() TODO disabled for now
 // {
-//     int NUM_READS = RSSI_FLOOR_NUM_READS * FHSSNumEntriess();
+//     int NUM_READS = RSSI_FLOOR_NUM_READS * FHSSgetChannelCount();
 //     float returnval = 0;
 
-//     for (uint32_t freq = 0; freq < FHSSNumEntriess(); freq++)
+//     for (uint32_t freq = 0; freq < FHSSgetChannelCount(); freq++)
 //     {
 //         FHSSsetCurrIndex(freq);
 //         Radio.SetMode(SX127X_CAD);
@@ -489,7 +529,7 @@ void ICACHE_RAM_ATTR SX127xDriver::ClearIRQFlags()
 //   hal.setRegValue(SX127X_REG_DIO_MAPPING_1, SX127X_DIO0_CAD_DONE | SX127X_DIO1_CAD_DETECTED, 7, 4);
 
 //   SetMode(SX127X_CAD);
-//   ClearIRQFlags();
+//   ClearIrqFlags();
 
 //   uint32_t startTime = millis();
 
@@ -504,12 +544,25 @@ void ICACHE_RAM_ATTR SX127xDriver::ClearIRQFlags()
 //       //yield();
 //       if (digitalRead(SX127x_dio1))
 //       {
-//         ClearIRQFlags();
+//         ClearIrqFlags();
 //         return (PREAMBLE_DETECTED);
 //       }
 //     }
 //   }
 
-//   ClearIRQFlags();
+//   ClearIrqFlags();
 //   return (CHANNEL_FREE);
 // }
+
+void ICACHE_RAM_ATTR SX127xDriver::IsrCallback()
+{
+    uint8_t irqStatus = instance->GetIrqFlags();
+    instance->ClearIrqFlags();
+    if ((irqStatus & SX127X_CLEAR_IRQ_FLAG_TX_DONE) && (instance->currOpmode == SX127x_OPMODE_TX))
+    {
+        hal.TXRXdisable();
+        instance->TXnbISR();
+    }
+    if ((irqStatus & SX127X_CLEAR_IRQ_FLAG_RX_DONE) && ((instance->currOpmode == SX127x_OPMODE_RXSINGLE) || (instance->currOpmode == SX127x_OPMODE_RXCONTINUOUS)))
+        instance->RXnbISR();
+}

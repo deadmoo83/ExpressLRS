@@ -1,54 +1,24 @@
-#include "targets.h"
-#include "common.h"
+#include "rxtx_common.h"
 
-#if defined(Regulatory_Domain_AU_915) || defined(Regulatory_Domain_EU_868) || defined(Regulatory_Domain_IN_866) || defined(Regulatory_Domain_FCC_915) || defined(Regulatory_Domain_AU_433) || defined(Regulatory_Domain_EU_433)
-#include "SX127xDriver.h"
-SX127xDriver Radio;
-#elif defined(Regulatory_Domain_ISM_2400)
-#include "SX1280Driver.h"
-SX1280Driver Radio;
-#endif
-
-#include "CRSF.h"
 #include "lua.h"
-#include "luaParams.h"
-
-#include "FHSS.h"
-#include "logging.h"
-#include "POWERMGNT.h"
-#include "LED.h"
 #include "msp.h"
-#include "msptypes.h"
-#include <OTA.h>
-#include "elrs_eeprom.h"
-#include "options.h"
-#include "config.h"
-#include "hwTimer.h"
-#include "LQCALC.h"
-#include "LowPassFilter.h"
 #include "telemetry_protocol.h"
 #include "stubborn_receiver.h"
 #include "stubborn_sender.h"
 
-#ifdef HAS_OLED
-#include "OLED.h"
-#endif
-
-#ifdef PLATFORM_ESP8266
-#include "soc/soc.h"
-#include "soc/rtc_cntl_reg.h"
-#endif
-#ifdef PLATFORM_ESP32
-#include "ESP32_WebUpdate.h"
-#endif
-#include "ESP32_BLE_HID.h"
-bool BLEjoystickActive = false;
-volatile bool BLEjoystickRefresh = false;
-
-#if defined(GPIO_PIN_BUTTON) && (GPIO_PIN_BUTTON != UNDEF_PIN)
-#include "button.h"
-button button;
-#endif
+#include "devCRSF.h"
+#include "devLED.h"
+#include "devScreen.h"
+#include "devBuzzer.h"
+#include "devBLE.h"
+#include "devLUA.h"
+#include "devWIFI.h"
+#include "devButton.h"
+#include "devVTX.h"
+#include "devGsensor.h"
+#include "devThermal.h"
+#include "devPDET.h"
+#include "devBackpack.h"
 
 //// CONSTANTS ////
 #define MSP_PACKET_SEND_INTERVAL 10LU
@@ -65,67 +35,82 @@ POWERMGNT POWERMGNT;
 MSP msp;
 ELRS_EEPROM eeprom;
 TxConfig config;
-
-#if defined(HAS_OLED)
-OLED OLED;
-char commitStr[7] = {LATEST_COMMIT , 0};
-#endif
-
-static void ICACHE_RAM_ATTR (*GenerateChannelData)(volatile uint8_t* Buffer, CRSF *crsf, bool TelemetryStatus) = GenerateChannelDataHybridSwitch8;
+Stream *LoggingBackpack;
 
 volatile uint8_t NonceTX;
 
-#ifdef PLATFORM_ESP32
-bool webUpdateMode = false;
+#if defined(PLATFORM_ESP8266) || defined(PLATFORM_ESP32)
+unsigned long rebootTime = 0;
+extern bool webserverPreventAutoStart;
 #endif
 //// MSP Data Handling ///////
 bool NextPacketIsMspData = false;  // if true the next packet will contain the msp data
 
 ////////////SYNC PACKET/////////
 /// sync packet spamming on mode change vars ///
-#define syncSpamAResidualTimeMS 1500 // we spam some more after rate change to help link get up to speed
+#define syncSpamAResidualTimeMS 500 // we spam some more after rate change to help link get up to speed
 #define syncSpamAmount 3
 volatile uint8_t syncSpamCounter = 0;
 uint32_t rfModeLastChangedMS = 0;
-////////////////////////////////////////////////
-
 uint32_t SyncPacketLastSent = 0;
+////////////////////////////////////////////////
 
 volatile uint32_t LastTLMpacketRecvMillis = 0;
 uint32_t TLMpacketReported = 0;
 
 LQCALC<10> LQCalc;
-LPF LPD_DownlinkLQ(1);
 
 volatile bool busyTransmitting;
-volatile bool UpdateModelReq = false;
-uint32_t HWtimerPauseDuration = 0;
+static volatile bool ModelUpdatePending;
 
-char luaBadGoodString[10] = {"xxxxx/yyy"};
+bool InBindingMode = false;
+uint8_t MSPDataPackage[5];
+static uint8_t BindingSendCount;
+bool RxWiFiReadyToSend = false;
 
-bool WaitRXresponse = false;
-bool WaitEepromCommit = false;
-
-uint8_t InBindingMode = 0;
-uint8_t BindingPackage[5];
-uint8_t BindingSendCount = 0;
-void EnterBindingMode();
-void ExitBindingMode();
-void SendUIDOverMSP();
-void VtxConfigToMSPOut();
-void eepromWriteToMSPOut();
-uint8_t VtxConfigReadyToSend = false;
-
+static TxTlmRcvPhase_e TelemetryRcvPhase = ttrpTransmitting;
 StubbornReceiver TelemetryReceiver(ELRS_TELEMETRY_MAX_PACKAGES);
 StubbornSender MspSender(ELRS_MSP_MAX_PACKAGES);
 uint8_t CRSFinBuffer[CRSF_MAX_PACKET_LEN+1];
-// MSP packet handling function defs
-void ProcessMSPPacket(mspPacket_t *packet);
-void OnRFModePacket(mspPacket_t *packet);
-void OnTxPowerPacket(mspPacket_t *packet);
-void OnTLMRatePacket(mspPacket_t *packet);
 
-uint8_t baseMac[6];
+device_affinity_t ui_devices[] = {
+  {&CRSF_device, 0},
+#ifdef HAS_LED
+  {&LED_device, 1},
+#endif
+#ifdef HAS_RGB
+  {&RGB_device, 1},
+#endif
+  {&LUA_device, 1},
+#if defined(USE_TX_BACKPACK)
+  {&Backpack_device, 1},
+#endif
+#ifdef HAS_BLE
+  {&BLE_device, 1},
+#endif
+#ifdef HAS_BUZZER
+  {&Buzzer_device, 1},
+#endif
+#ifdef HAS_WIFI
+  {&WIFI_device, 1},
+#endif
+#ifdef HAS_BUTTON
+  {&Button_device, 1},
+#endif
+#if defined(HAS_TFT_SCREEN) || defined(USE_OLED_SPI) || defined(USE_OLED_SPI_SMALL) || defined(USE_OLED_I2C)
+  {&Screen_device, 0},
+#endif
+#ifdef HAS_GSENSOR
+  {&Gsensor_device, 0},
+#endif
+#if defined(HAS_THERMAL) || defined(HAS_FAN)
+  {&Thermal_device, 0},
+#endif
+#if defined(GPIO_PIN_PA_PDET) && GPIO_PIN_PA_PDET != UNDEF_PIN
+  {&PDET_device, 1},
+#endif
+  {&VTX_device, 1}
+};
 
 //////////// DYNAMIC TX OUTPUT POWER ////////////
 
@@ -133,7 +118,13 @@ uint8_t baseMac[6];
   #define DYNPOWER_THRESH_UP              15
 #endif
 #if !defined(DYNPOWER_THRESH_DN)
-  #define DYNPOWER_THRESH_DN              30
+  #define DYNPOWER_THRESH_DN              21
+#endif
+#if !defined(DYNPOWER_THRESH_LQ_UP)
+  #define DYNPOWER_THRESH_LQ_UP           85
+#endif
+#if !defined(DYNPOWER_THRESH_LQ_DN)
+  #define DYNPOWER_THRESH_LQ_DN           97
 #endif
 #define DYNAMIC_POWER_MIN_RECORD_NUM       5 // average at least this number of records
 #define DYNAMIC_POWER_BOOST_LQ_THRESHOLD  20 // If LQ is dropped suddenly for this amount (relative), immediately boost to the max power configured.
@@ -141,39 +132,75 @@ uint8_t baseMac[6];
 #define DYNAMIC_POWER_MOVING_AVG_K         8 // Number of previous values for calculating moving average. Best with power of 2.
 static int32_t dynamic_power_rssi_sum;
 static int32_t dynamic_power_rssi_n;
-static int32_t dynamic_power_avg_lq;
+static int32_t dynamic_power_avg_lq = DYNPOWER_THRESH_LQ_DN << 16;
 static bool dynamic_power_updated;
+
+#ifdef TARGET_TX_GHOST
+extern "C"
+/**
+  * @brief This function handles external line 2 interrupt request.
+  * @param  None
+  * @retval None
+  */
+void EXTI2_TSC_IRQHandler()
+{
+  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_2);
+}
+#endif
+
+bool ICACHE_RAM_ATTR IsArmed()
+{
+   return CRSF_to_BIT(crsf.ChannelDataIn[AUX1]);
+}
 
 //////////// DYNAMIC TX OUTPUT POWER ////////////
 
 // Assume this function is called inside loop(). Heavy functions goes here.
 void DynamicPower_Update()
 {
+  bool doUpdate = dynamic_power_updated;
+  dynamic_power_updated = false;
+
+  // Get the RSSI from the selected antenna.
+  int8_t rssi = (crsf.LinkStatistics.active_antenna == 0)? crsf.LinkStatistics.uplink_RSSI_1: crsf.LinkStatistics.uplink_RSSI_2;
+
+  if (doUpdate && (rssi >= -5)) { // power is too strong and saturate the RX LNA
+    DBGVLN("Power decrease due to the power blast");
+    POWERMGNT.decPower();
+  }
+
+  // When not using dynamic power, return here
   if (!config.GetDynamicPower()) {
+    // if RSSI is dropped enough, inc power back to the configured power
+    if (doUpdate && (rssi <= -20)) {
+      POWERMGNT.setPower((PowerLevels_e)config.GetPower());
+    }
     return;
   }
 
+  // The rest of the codes should be executeded only if dynamic power config is enabled
+
   // =============  DYNAMIC_POWER_BOOST: Switch-triggered power boost up ==============
+  // Or if telemetry is lost while armed (done up here because dynamic_power_updated is only updated on telemetry)
   uint8_t boostChannel = config.GetBoostChannel();
-  if (boostChannel > 0) {
-    // if a user selected to disable dynamic power (ch16)
-    if(CRSF_to_BIT(crsf.ChannelDataIn[AUX9 + boostChannel - 1]) == 0) {
-      POWERMGNT.setPower((PowerLevels_e)config.GetPower());
-      // POWERMGNT.setPower((PowerLevels_e)MaxPower);    // if you want to make the power to the aboslute maximum of a module, use this line.
-      return;
-    }
+  if ((connectionState == disconnected && IsArmed()) ||
+    (boostChannel && (CRSF_to_BIT(crsf.ChannelDataIn[AUX9 + boostChannel - 1]) == 0)))
+  {
+    POWERMGNT.setPower((PowerLevels_e)config.GetPower());
+    // POWERMGNT.setPower((PowerLevels_e)MaxPower);    // if you want to make the power to the aboslute maximum of a module, use this line.
+    return;
   }
 
   // if telemetry is not arrived, quick return.
-  if (!dynamic_power_updated)
+  if (!doUpdate)
     return;
-  dynamic_power_updated = false;
-
+  
   // =============  LQ-based power boost up ==============
   // Quick boost up of power when detected any emergency LQ drops.
   // It should be useful for bando or sudden lost of LoS cases.
   int32_t lq_current = crsf.LinkStatistics.uplink_Link_quality;
-  int32_t lq_diff = (dynamic_power_avg_lq>>16) - lq_current;
+  int32_t lq_avg = dynamic_power_avg_lq>>16;
+  int32_t lq_diff = lq_avg - lq_current;
   // if LQ drops quickly (DYNAMIC_POWER_BOOST_LQ_THRESHOLD) or critically low below DYNAMIC_POWER_BOOST_LQ_MIN, immediately boost to the configured max power.
   if(lq_diff >= DYNAMIC_POWER_BOOST_LQ_THRESHOLD || lq_current <= DYNAMIC_POWER_BOOST_LQ_MIN)
   {
@@ -187,13 +214,10 @@ void DynamicPower_Update()
 
   // =============  RSSI-based power adjustment ==============
   // It is working slowly, suitable for a general long-range flights.
-
-  // Get the RSSI from the selected antenna.
-  int8_t rssi = (crsf.LinkStatistics.active_antenna == 0)? crsf.LinkStatistics.uplink_RSSI_1: crsf.LinkStatistics.uplink_RSSI_2;
-
   dynamic_power_rssi_sum += rssi;
   dynamic_power_rssi_n++;
 
+  //DBGLN("LQ=%d LQA=%d RSSI=%d", lq_current, lq_avg, rssi);
   // Dynamic power needs at least DYNAMIC_POWER_MIN_RECORD_NUM amount of telemetry records to update.
   if(dynamic_power_rssi_n < DYNAMIC_POWER_MIN_RECORD_NUM)
     return;
@@ -201,16 +225,18 @@ void DynamicPower_Update()
   int32_t avg_rssi = dynamic_power_rssi_sum / dynamic_power_rssi_n;
   int32_t expected_RXsensitivity = ExpressLRS_currAirRate_RFperfParams->RXsensitivity;
 
-  int32_t rssi_inc_threshold = expected_RXsensitivity + DYNPOWER_THRESH_UP;
-  int32_t rssi_dec_threshold = expected_RXsensitivity + DYNPOWER_THRESH_DN;
+  int32_t lq_adjust = (100-lq_avg)/3;
+  int32_t rssi_inc_threshold = expected_RXsensitivity + lq_adjust + DYNPOWER_THRESH_UP;  // thresholds are adjusted according to LQ fluctuation
+  int32_t rssi_dec_threshold = expected_RXsensitivity + lq_adjust + DYNPOWER_THRESH_DN;
 
   // increase power only up to the set power from the LUA script
-  if (avg_rssi < rssi_inc_threshold && POWERMGNT.currPower() < (PowerLevels_e)config.GetPower()) {
+  if ((avg_rssi < rssi_inc_threshold || lq_avg < DYNPOWER_THRESH_LQ_UP) && (POWERMGNT.currPower() < (PowerLevels_e)config.GetPower())) {
     DBGLN("Power increase");
     POWERMGNT.incPower();
   }
-  if (avg_rssi > rssi_dec_threshold) {
-    DBGLN("Power decrease");
+  if (avg_rssi > rssi_dec_threshold && lq_avg > DYNPOWER_THRESH_LQ_DN) {
+    DBGVLN("Power decrease");  // Print this on verbose only, to prevent spamming when on a high telemetry ratio
+    dynamic_power_avg_lq = (DYNPOWER_THRESH_LQ_DN-5)<<16;    // preventing power down too fast due to the averaged LQ calculated from higher power.
     POWERMGNT.decPower();
   }
 
@@ -218,22 +244,20 @@ void DynamicPower_Update()
   dynamic_power_rssi_n = 0;
 }
 
-#if defined(NO_SYNC_ON_ARM)
-static bool ICACHE_RAM_ATTR IsArmed()
+void ICACHE_RAM_ATTR ProcessTLMpacket(SX12xxDriverCommon::rx_status const status)
 {
-   return CRSF_to_BIT(crsf.ChannelDataIn[AUX1]);
-}
-#endif
-
-void ICACHE_RAM_ATTR ProcessTLMpacket()
-{
-  uint16_t inCRC = (((uint16_t)Radio.RXdataBuffer[0] & 0b11111100) << 6) | Radio.RXdataBuffer[7];
+  if (status != SX12xxDriverCommon::SX12XX_RX_OK)
+  {
+    DBGLN("TLM HW CRC error");
+    return;
+  }
+  uint16_t const inCRC = (((uint16_t)Radio.RXdataBuffer[0] & 0b11111100) << 6) | Radio.RXdataBuffer[7];
 
   Radio.RXdataBuffer[0] &= 0b11;
-  uint16_t calculatedCRC = ota_crc.calc(Radio.RXdataBuffer, 7, CRCInitializer);
+  uint16_t const calculatedCRC = ota_crc.calc(Radio.RXdataBuffer, 7, CRCInitializer);
 
-  uint8_t type = Radio.RXdataBuffer[0] & TLM_PACKET;
-  uint8_t TLMheader = Radio.RXdataBuffer[1];
+  uint8_t const type = Radio.RXdataBuffer[0] & TLM_PACKET;
+  uint8_t const TLMheader = Radio.RXdataBuffer[1];
 
   if ((inCRC != calculatedCRC))
   {
@@ -247,14 +271,6 @@ void ICACHE_RAM_ATTR ProcessTLMpacket()
     return;
   }
 
-  if (connectionState != connected)
-  {
-    connectionState = connected;
-    LPD_DownlinkLQ.init(100);
-    VtxConfigReadyToSend = true;
-    DBGLN("got downlink conn");
-  }
-
   LastTLMpacketRecvMillis = millis();
   LQCalc.add();
 
@@ -262,18 +278,19 @@ void ICACHE_RAM_ATTR ProcessTLMpacket()
     {
         case ELRS_TELEMETRY_TYPE_LINK:
             // Antenna is the high bit in the RSSI_1 value
-            crsf.LinkStatistics.active_antenna = Radio.RXdataBuffer[2] >> 7;
             // RSSI received is signed, inverted polarity (positive value = -dBm)
             // OpenTX's value is signed and will display +dBm and -dBm properly
             crsf.LinkStatistics.uplink_RSSI_1 = -(Radio.RXdataBuffer[2] & 0x7f);
-            crsf.LinkStatistics.uplink_RSSI_2 = -(Radio.RXdataBuffer[3]);
+            crsf.LinkStatistics.uplink_RSSI_2 = -(Radio.RXdataBuffer[3] & 0x7f);
             crsf.LinkStatistics.uplink_SNR = Radio.RXdataBuffer[4];
             crsf.LinkStatistics.uplink_Link_quality = Radio.RXdataBuffer[5];
-            crsf.LinkStatistics.uplink_TX_Power = POWERMGNT.powerToCrsfPower(POWERMGNT.currPower());
             crsf.LinkStatistics.downlink_SNR = Radio.LastPacketSNR;
             crsf.LinkStatistics.downlink_RSSI = Radio.LastPacketRSSI;
-            crsf.LinkStatistics.downlink_Link_quality = LPD_DownlinkLQ.update(LQCalc.getLQ()) + 1; // +1 fixes rounding issues with filter and makes it consistent with RX LQ Calculation
-            crsf.LinkStatistics.rf_Mode = (uint8_t)RATE_4HZ - (uint8_t)ExpressLRS_currAirRate_Modparams->enum_rate;
+            crsf.LinkStatistics.active_antenna = Radio.RXdataBuffer[2] >> 7;
+            connectionHasModelMatch = Radio.RXdataBuffer[3] >> 7;
+            // -- uplink_TX_Power is updated via devCRSF event, so it updates with no telemetry
+            // -- rf_mode is updated when we change rates
+            // -- downlink_Link_quality is updated before the LQ period is incremented
             MspSender.ConfirmCurrentPayload(Radio.RXdataBuffer[6] == 1);
 
             dynamic_power_updated = true;
@@ -287,64 +304,64 @@ void ICACHE_RAM_ATTR ProcessTLMpacket()
 
 void ICACHE_RAM_ATTR GenerateSyncPacketData()
 {
-  const uint8_t SwitchEncMode = config.GetSwitchMode() & 0b11;
+  const uint8_t SwitchEncMode = config.GetSwitchMode();
   uint8_t Index;
   if (syncSpamCounter)
   {
-    Index = (config.GetRate() & 0b11);
+    Index = config.GetRate();
   }
   else
   {
-    Index = (ExpressLRS_currAirRate_Modparams->index & 0b11);
+    Index = ExpressLRS_currAirRate_Modparams->index;
   }
 
+  if (syncSpamCounter)
+    --syncSpamCounter;
+  SyncPacketLastSent = millis();
+
   // TLM ratio is boosted for one sync cycle when the MspSender goes active
-  if (MspSender.IsActive())
-    ExpressLRS_currAirRate_Modparams->TLMinterval = TLM_RATIO_1_2;
-  else
-    ExpressLRS_currAirRate_Modparams->TLMinterval = (expresslrs_tlm_ratio_e)config.GetTlm();
-  uint8_t TLMrate = (ExpressLRS_currAirRate_Modparams->TLMinterval & 0b111);
+  expresslrs_tlm_ratio_e newTlmRatio = (MspSender.IsActive()) ? TLM_RATIO_1_2 : (expresslrs_tlm_ratio_e)config.GetTlm();
+  // Delay going into disconnected state when the TLM ratio increases
+  if (connectionState == connected && ExpressLRS_currAirRate_Modparams->TLMinterval < newTlmRatio)
+    LastTLMpacketRecvMillis = SyncPacketLastSent;
+  ExpressLRS_currAirRate_Modparams->TLMinterval = newTlmRatio;
 
   Radio.TXdataBuffer[0] = SYNC_PACKET & 0b11;
   Radio.TXdataBuffer[1] = FHSSgetCurrIndex();
   Radio.TXdataBuffer[2] = NonceTX;
-  Radio.TXdataBuffer[3] = (Index << 6) + (TLMrate << 3) + (SwitchEncMode << 1);
+  Radio.TXdataBuffer[3] = ((Index & SYNC_PACKET_RATE_MASK) << SYNC_PACKET_RATE_OFFSET) +
+                          ((newTlmRatio & SYNC_PACKET_TLM_MASK) << SYNC_PACKET_TLM_OFFSET) +
+                          ((SwitchEncMode & SYNC_PACKET_SWITCH_MASK) << SYNC_PACKET_SWITCH_OFFSET);
   Radio.TXdataBuffer[4] = UID[3];
   Radio.TXdataBuffer[5] = UID[4];
   Radio.TXdataBuffer[6] = UID[5];
-  if (!InBindingMode && config.GetModelMatch()) {
-    Radio.TXdataBuffer[6] ^= crsf.getModelID();
+  // For model match, the last byte of the binding ID is XORed with the inverse of the modelId
+  if (!InBindingMode && config.GetModelMatch())
+  {
+    Radio.TXdataBuffer[6] ^= (~crsf.getModelID()) & MODELMATCH_MASK;
   }
-
-  SyncPacketLastSent = millis();
-  if (syncSpamCounter)
-    --syncSpamCounter;
 }
 
-void SetSwitchMode(uint32_t switchMode)
+uint8_t adjustPacketRateForBaud(uint8_t rateIndex)
 {
-  switch(switchMode) {
-    case 0b00:
-      GenerateChannelData = GenerateChannelDataHybridSwitch8;
-      crsf.setNextSwitchFirstIndex(1);
-      break;
-    case 0b01:
-      GenerateChannelData = GenerateChannelDataHybridSwitch8;
-      crsf.setNextSwitchFirstIndex(1);
-      break;
-    case 0b10:
-      // Future switch-mode expansion
-    case 0b11:
-      // Future switch-mode expansion
-    default:
-      GenerateChannelData = GenerateChannelDataHybridSwitch8;
-      crsf.setNextSwitchFirstIndex(1);
-      break;
-  }
+  #if defined(RADIO_SX128X)
+    // Packet rate limited to 250Hz if we are on 115k baud
+    if (crsf.GetCurrentBaudRate() == 115200) {
+      while (rateIndex < RATE_MAX) {
+        expresslrs_mod_settings_s const * const ModParams = get_elrs_airRateConfig(rateIndex);
+        if (ModParams->enum_rate <= RATE_LORA_250HZ) {
+          break;
+        }
+        rateIndex++;
+      }
+    }
+  #endif
+  return rateIndex;
 }
 
 void ICACHE_RAM_ATTR SetRFLinkRate(uint8_t index) // Set speed of RF link (hz)
 {
+  index = adjustPacketRateForBaud(index);
   expresslrs_mod_settings_s *const ModParams = get_elrs_airRateConfig(index);
   expresslrs_rf_pref_params_s *const RFperf = get_elrs_RFperfParams(index);
   bool invertIQ = UID[5] & 0x01;
@@ -353,12 +370,18 @@ void ICACHE_RAM_ATTR SetRFLinkRate(uint8_t index) // Set speed of RF link (hz)
     && (invertIQ == Radio.IQinverted))
     return;
 
-  DBGLN("set rate");
+  DBGLN("set rate %u", index);
   hwTimer.updateInterval(ModParams->interval);
-  Radio.Config(ModParams->bw, ModParams->sf, ModParams->cr, GetInitialFreq(), ModParams->PreambleLen, invertIQ, ModParams->PayloadLength);
+  Radio.Config(ModParams->bw, ModParams->sf, ModParams->cr, GetInitialFreq(),
+               ModParams->PreambleLen, invertIQ, ModParams->PayloadLength, ModParams->interval
+#if defined(RADIO_SX128X)
+               , uidMacSeedGet(), CRCInitializer, (ModParams->radio_type == RADIO_TYPE_SX128x_FLRC)
+#endif
+               );
 
   ExpressLRS_currAirRate_Modparams = ModParams;
   ExpressLRS_currAirRate_RFperfParams = RFperf;
+  crsf.LinkStatistics.rf_Mode = ModParams->enum_rate;
 
   crsf.setSyncParams(ModParams->interval);
   connectionState = disconnected;
@@ -367,87 +390,60 @@ void ICACHE_RAM_ATTR SetRFLinkRate(uint8_t index) // Set speed of RF link (hz)
 
 void ICACHE_RAM_ATTR HandleFHSS()
 {
-  if (InBindingMode)
-  {
-    return;
-  }
-
-  uint8_t modresult = (NonceTX) % ExpressLRS_currAirRate_Modparams->FHSShopInterval;
-
-  if (modresult == 0) // if it time to hop, do so.
+  uint8_t modresult = (NonceTX + 1) % ExpressLRS_currAirRate_Modparams->FHSShopInterval;
+  // If the next packet should be on the next FHSS frequency, do the hop
+  if (!InBindingMode && modresult == 0)
   {
     Radio.SetFrequencyReg(FHSSgetNextFreq());
   }
 }
 
-void ICACHE_RAM_ATTR HandleTLM()
+void ICACHE_RAM_ATTR HandlePrepareForTLM()
 {
-  if (ExpressLRS_currAirRate_Modparams->TLMinterval > 0)
+  uint8_t modresult = (NonceTX + 1) % TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+  // If next packet is going to be telemetry, start listening to have a large receive window (time-wise)
+  if (ExpressLRS_currAirRate_Modparams->TLMinterval != TLM_RATIO_NO_TLM && modresult == 0)
   {
-    uint8_t modresult = (NonceTX) % TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
-    if (modresult != 0) // wait for tlm response because it's time
-    {
-      return;
-    }
     Radio.RXnb();
-    WaitRXresponse = true;
+    TelemetryRcvPhase = ttrpPreReceiveGap;
   }
 }
 
 void ICACHE_RAM_ATTR SendRCdataToRF()
 {
-  uint8_t *data;
-  uint8_t maxLength;
-  uint8_t packageIndex;
-#ifdef FEATURE_OPENTX_SYNC
-  crsf.JustSentRFpacket(); // tells the crsf that we want to send data now - this allows opentx packet syncing
-#endif
-
-  /////// This Part Handles the Telemetry Response ///////
-  if ((uint8_t)ExpressLRS_currAirRate_Modparams->TLMinterval > 0)
-  {
-    uint8_t modresult = (NonceTX) % TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
-    if (modresult == 0)
-    { // wait for tlm response
-      if (WaitRXresponse == true)
-      {
-        WaitRXresponse = false;
-        LQCalc.inc();
-        return;
-      }
-      else
-      {
-        NonceTX++;
-      }
-    }
-  }
-
-  uint32_t SyncInterval;
-
+  uint32_t now = millis();
+  static uint8_t syncSlot;
 #if defined(NO_SYNC_ON_ARM)
-  SyncInterval = 250;
-  bool skipSync = IsArmed();
+  uint32_t SyncInterval = 250;
+  bool skipSync = IsArmed() || InBindingMode;
 #else
-  SyncInterval = (connectionState == connected) ? ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalConnected : ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalDisconnected;
-  bool skipSync = false;
+  uint32_t SyncInterval = (connectionState == connected) ? ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalConnected : ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalDisconnected;
+  bool skipSync = InBindingMode;
 #endif
 
   uint8_t NonceFHSSresult = NonceTX % ExpressLRS_currAirRate_Modparams->FHSShopInterval;
-  bool NonceFHSSresultWindow = (NonceFHSSresult == 1 || NonceFHSSresult == 2) ? true : false; // restrict to the middle nonce ticks (not before or after freq chance)
-  bool WithinSyncSpamResidualWindow = (millis() - rfModeLastChangedMS < syncSpamAResidualTimeMS) ? true : false;
+  bool WithinSyncSpamResidualWindow = now - rfModeLastChangedMS < syncSpamAResidualTimeMS;
 
-  if ((syncSpamCounter || WithinSyncSpamResidualWindow) && NonceFHSSresultWindow)
+  // Sync spam only happens on slot 1 and 2 and can't be disabled
+  if ((syncSpamCounter || WithinSyncSpamResidualWindow) && (NonceFHSSresult == 1 || NonceFHSSresult == 2))
   {
     GenerateSyncPacketData();
+    syncSlot = 0; // reset the sync slot in case the new rate (after the syncspam) has a lower FHSShopInterval
   }
-  else if ((!skipSync) && ((millis() > (SyncPacketLastSent + SyncInterval)) && (Radio.currFreq == GetInitialFreq()) && NonceFHSSresultWindow)) // don't sync just after we changed freqs (helps with hwTimer.init() being in sync from the get go)
+  // Regular sync rotates through 4x slots, twice on each slot, and telemetry pushes it to the next slot up
+  // But only on the sync FHSS channel and with a timed delay between them
+  else if ((!skipSync) && ((syncSlot / 2) <= NonceFHSSresult) && (now - SyncPacketLastSent > SyncInterval) && (Radio.currFreq == GetInitialFreq()))
   {
     GenerateSyncPacketData();
+    syncSlot = (syncSlot + 1) % (ExpressLRS_currAirRate_Modparams->FHSShopInterval * 2);
   }
   else
   {
     if (NextPacketIsMspData && MspSender.IsActive())
     {
+      uint8_t *data;
+      uint8_t maxLength;
+      uint8_t packageIndex;
       MspSender.GetCurrentPayload(&packageIndex, &maxLength, &data);
       Radio.TXdataBuffer[0] = MSP_DATA_PACKET & 0b11;
       Radio.TXdataBuffer[1] = packageIndex;
@@ -469,23 +465,67 @@ void ICACHE_RAM_ATTR SendRCdataToRF()
     {
       // always enable msp after a channel package since the slot is only used if MspSender has data to send
       NextPacketIsMspData = true;
-      GenerateChannelData(Radio.TXdataBuffer, &crsf, TelemetryReceiver.GetCurrentConfirm());
+      PackChannelData(Radio.TXdataBuffer, &crsf, TelemetryReceiver.GetCurrentConfirm(),
+        NonceTX, TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval));
     }
   }
 
+  // artificially inject the low bits of the nonce on data packets, this will be overwritten with the CRC after it's calculated
+  if (Radio.TXdataBuffer[0] == RC_DATA_PACKET && OtaSwitchModeCurrent == smHybridWide)
+    Radio.TXdataBuffer[0] |= NonceFHSSresult << 2;
+
   ///// Next, Calculate the CRC and put it into the buffer /////
   uint16_t crc = ota_crc.calc(Radio.TXdataBuffer, 7, CRCInitializer);
-  Radio.TXdataBuffer[0] |= (crc >> 6) & 0b11111100;
+  Radio.TXdataBuffer[0] = (Radio.TXdataBuffer[0] & 0b11) | ((crc >> 6) & 0b11111100);
   Radio.TXdataBuffer[7] = crc & 0xFF;
 
-  Radio.TXnb();
+#if defined(Regulatory_Domain_EU_CE_2400)
+  if (ChannelIsClear())
+#endif
+  {
+    Radio.TXnb();
+  }
 }
 
 /*
- * Called as the timer ISR when transmitting
+ * Called as the TOCK timer ISR when there is a CRSF connection from the handset
  */
 void ICACHE_RAM_ATTR timerCallbackNormal()
 {
+#if defined(Regulatory_Domain_EU_CE_2400)
+  if(!LBTSuccessCalc.currentIsSet())
+  {
+    Radio.TXdoneCallback();
+  }
+#endif
+
+  // Sync OpenTX to this point
+  crsf.JustSentRFpacket();
+
+  // Nonce advances on every timer tick
+  if (!InBindingMode)
+    NonceTX++;
+
+  // If HandleTLM has started Receive mode, TLM packet reception should begin shortly
+  // Skip transmitting on this slot
+  if (TelemetryRcvPhase == ttrpPreReceiveGap)
+  {
+    TelemetryRcvPhase = ttrpExpectingTelem;
+#if defined(Regulatory_Domain_EU_CE_2400)
+    // Use downlink LQ for LBT success ratio instead for EU/CE reg domain
+    crsf.LinkStatistics.downlink_Link_quality = LBTSuccessCalc.getLQ();
+#else
+    crsf.LinkStatistics.downlink_Link_quality = LQCalc.getLQ();
+#endif
+    LQCalc.inc();
+    return;
+  }
+  TelemetryRcvPhase = ttrpTransmitting;
+
+#if defined(Regulatory_Domain_EU_CE_2400)
+    BeginClearChannelAssessment(); // Get RSSI reading here, used also for next TX if in receiveMode.
+#endif
+
   // Do not send a stale channels packet to the RX if one has not been received from the handset
   // *Do* send data if a packet has never been received from handset and the timer is running
   //     this is the case when bench testing and TXing without a handset
@@ -503,296 +543,86 @@ void ICACHE_RAM_ATTR timerCallbackNormal()
 void ICACHE_RAM_ATTR timerCallbackIdle()
 {
   NonceTX++;
-  if (NonceTX % ExpressLRS_currAirRate_Modparams->FHSShopInterval == 0)
-  {
-    FHSSptr++;
-  }
-}
-
-void registerLuaParameters() {
-  registerLUAParameter(&luaAirRate, [](uint8_t id, uint8_t arg){
-    if ((arg < RATE_MAX) && (arg >= 0))
-    {
-      DBGLN("Request AirRate: %d", arg);
-      config.SetRate(arg);
-      #if defined(HAS_OLED)
-        OLED.updateScreen(OLED.getPowerString((PowerLevels_e)POWERMGNT.currPower()),
-                          OLED.getRateString((expresslrs_RFrates_e)arg),
-                          OLED.getTLMRatioString((expresslrs_tlm_ratio_e)(ExpressLRS_currAirRate_Modparams->TLMinterval)), commitStr);
-      #endif
-    }
-  });
-  registerLUAParameter(&luaTlmRate, [](uint8_t id, uint8_t arg){
-    if ((arg <= (uint8_t)TLM_RATIO_1_2) && (arg >= (uint8_t)TLM_RATIO_NO_TLM))
-    {
-      DBGLN("Request TLM interval: %d", arg);
-      config.SetTlm((expresslrs_tlm_ratio_e)arg);
-      #if defined(HAS_OLED)
-        OLED.updateScreen(OLED.getPowerString((PowerLevels_e)POWERMGNT.currPower()),
-                          OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate),
-                          OLED.getTLMRatioString((expresslrs_tlm_ratio_e)arg), commitStr);
-      #endif
-    }
-  });
-  // Commented out for now until we add more switch options
-  // registerLUAParameter(&luaSwitch, [](uint8_t id, uint8_t arg){
-  //   uint32_t newSwitchMode = crsf.ParameterUpdateData[2] & 0b11;
-  //   DBGLN("Request Switch Mode: %d", newSwitchMode);
-  //   config.SetSwitchMode(crsf.getModelID(), newSwitchMode);
-  //   SetSwitchMode(newSwitchMode);
-  // });
-  registerLUAParameter(&luaModelMatch, [](uint8_t id, uint8_t arg){
-    bool newModelMatch = crsf.ParameterUpdateData[2] & 0b1;
-    DBGLN("Request Model Match: %d", newModelMatch);
-    config.SetModelMatch(newModelMatch);
-  });
-  registerLUAParameter(&luaSetRXModel, [](uint8_t id, uint8_t arg){
-    uint8_t rxModel = crsf.ParameterUpdateData[2];
-    DBGLN("Request Set RX Model: %d", rxModel);
-    mspPacket_t msp;
-    msp.reset();
-    msp.makeCommand();
-    msp.function = MSP_SET_RX_CONFIG;
-    msp.addByte(MSP_ELRS_MODEL_ID);
-    msp.addByte(rxModel);
-    crsf.AddMspMessage(&msp);
-  });
-  registerLUAParameter(&luaPowerFolder);
-  registerLUAParameter(&luaPower, [](uint8_t id, uint8_t arg){
-    PowerLevels_e newPower = (PowerLevels_e)arg;
-    DBGLN("Request Power: %d", newPower);
-    config.SetPower(newPower < MaxPower ? newPower : MaxPower);
-    #if defined(HAS_OLED)
-      OLED.updateScreen(OLED.getPowerString((PowerLevels_e)arg),
-                        OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate),
-                        OLED.getTLMRatioString((expresslrs_tlm_ratio_e)ExpressLRS_currAirRate_Modparams->TLMinterval), commitStr);
-    #endif
-  }, luaPowerFolder.luaProperties1.id);
-  registerLUAParameter(&luaDynamicPower, [](uint8_t id, uint8_t arg){
-      config.SetDynamicPower(arg > 0);
-      config.SetBoostChannel((arg - 1) > 0 ? arg - 1 : 0);
-  }, luaPowerFolder.luaProperties1.id);
-  registerLUAParameter(&luaVtxFolder);
-  registerLUAParameter(&luaVtxBand, [](uint8_t id, uint8_t arg){
-      config.SetVtxBand(arg);
-  },luaVtxFolder.luaProperties1.id);
-  registerLUAParameter(&luaVtxChannel, [](uint8_t id, uint8_t arg){
-      config.SetVtxChannel(arg);
-  },luaVtxFolder.luaProperties1.id);
-  registerLUAParameter(&luaVtxPwr, [](uint8_t id, uint8_t arg){
-      config.SetVtxPower(arg);
-  },luaVtxFolder.luaProperties1.id);
-  registerLUAParameter(&luaVtxPit, [](uint8_t id, uint8_t arg){
-      config.SetVtxPitmode(arg);
-  },luaVtxFolder.luaProperties1.id);
-  registerLUAParameter(&luaVtxSend, [](uint8_t id, uint8_t arg){
-      sendLuaFieldCrsf(id,0);
-      VtxConfigReadyToSend = true;
-  },luaVtxFolder.luaProperties1.id);
-
-  registerLUAParameter(&luaBind, [](uint8_t id, uint8_t arg){
-      if (arg > 0 && arg < 4)
-      {
-        DBGLN("Binding requested from LUA");
-        EnterBindingMode();
-      } else if(arg == 6){
-          sendLuaFieldCrsf(id, 0);
-      }
-      else
-      {
-        DBGLN("Binding stopped  from LUA");
-        ExitBindingMode();
-      }
-    });
-  #ifdef PLATFORM_ESP32
-    registerLUAParameter(&luaWebUpdate, [](uint8_t id, uint8_t arg){
-      if (arg > 0 && arg < 4) //start command, 1 = start
-                              //2 = running
-                              //3 = request confirmation
-      {
-        setLuaCommandInfo(&luaWebUpdate,"REBOOT to cancel");
-        setLuaCommandValue(&luaWebUpdate,3); //request confirm
-      } else if (arg == 4 || ( (arg > 0 && arg < 4) && (!crsf.elrsLUAmode))) // 4 = request confirmed
-      {
-        //confirm run on ELRSv2.lua or start command from CRSF configurator,
-        //since ELRS LUA can do 2 step confirmation, it needs confirmation to start wifi to prevent stuck on
-        //unintentional button press. 
-        setLuaCommandValue(&luaWebUpdate,2); //running status
-        webUpdateMode = true;
-        DBGLN("Wifi Update Mode Requested!");
-        BeginWebUpdate();
-      } else if(arg == 6){ //6 = status poll
-          sendLuaFieldCrsf(id,0);
-      } else { //5 or anything else is cancel
-        setLuaCommandValue(&luaWebUpdate,0);
-      }
-    });
-  
-    registerLUAParameter(&luaBLEJoystick, [](uint8_t id, uint8_t arg){
-      if (arg > 0 && arg < 4) //start command, 1 = start
-                              //2 = running
-                              //3 = request confirmation
-      {
-        setLuaCommandInfo(&luaBLEJoystick,"REBOOT to cancel");
-        setLuaCommandValue(&luaBLEJoystick,3); //request confirm
-      } else if (arg == 4 || ( (arg > 0 && arg < 4) && (!crsf.elrsLUAmode))) // 4 = request confirmed
-      {
-        //confirm run on ELRSv2.lua or start command from CRSF configurator,
-        //since ELRS LUA can do 2 step confirmation, it needs confirmation to start wifi to prevent stuck on
-        //unintentional button press. 
-        setLuaCommandValue(&luaBLEJoystick,2); //running status
-        BLEjoystickActive = true;
-  #ifndef DEBUG_SUPPRESS
-        Serial.println("BLE Joystick Mode Requested!");
-  #endif
-        hwTimer.stop();
-        crsf.RCdataCallback = &BluetoothJoystickUpdateValues;
-        hwTimer.updateInterval(5000);
-        crsf.setSyncParams(5000); // 100hz
-        delay(1000);
-        crsf.disableOpentxSync();
-  #if defined(Regulatory_Domain_ISM_2400)
-        Radio.SetMode(SX1280_MODE_SLEEP);
-  #else
-        Radio.SetMode(SX127x_OPMODE_SLEEP);
-  #endif
-        Radio.End();
-        BluetoothJoystickBegin();
-      } else if(arg == 6){ //6 = status poll
-        sendLuaFieldCrsf(id,0);
-      } else { //5 or anything else is cancel
-        setLuaCommandValue(&luaBLEJoystick,0);
-      }
-    });
-
-  #endif
-
-  registerLUAParameter(&luaInfo);
-  registerLUAParameter(&luaELRSversion);
-}
-
-void resetLuaParams(){
-  setLuaTextSelectionValue(&luaAirRate,(uint8_t)config.GetRate());
-  setLuaTextSelectionValue(&luaTlmRate,(uint8_t)config.GetTlm());
-  // Commented out for now until we add more switch options
-  //setLuaTextSelectionValue(&luaSwitch,(uint8_t)(config.GetSwitchMode()));
-  setLuaTextSelectionValue(&luaModelMatch,(uint8_t)config.GetModelMatch());
-  setLuaUint8Value(&luaSetRXModel,(uint8_t)0);
-
-  setLuaTextSelectionValue(&luaPower,(uint8_t)(config.GetPower()));
-
-  uint8_t dynamic = config.GetDynamicPower() ? config.GetBoostChannel() + 1 : 0;
-  setLuaTextSelectionValue(&luaDynamicPower,dynamic);
-  
-  setLuaTextSelectionValue(&luaVtxBand,config.GetVtxBand());
-  setLuaTextSelectionValue(&luaVtxChannel,config.GetVtxChannel());
-  setLuaTextSelectionValue(&luaVtxPwr,config.GetVtxPower());
-  setLuaTextSelectionValue(&luaVtxPit,config.GetVtxPitmode());
-}
-
-void updateLUApacketCount(){
-  itoa(crsf.BadPktsCountResult, luaBadGoodString, 10);
-  strcat(luaBadGoodString, "/");
-  itoa(crsf.GoodPktsCountResult, luaBadGoodString + strlen(luaBadGoodString), 10);
-  setLuaStringValue(&luaInfo, luaBadGoodString);
-  resetLuaParams();
+  if ((NonceTX + 1) % ExpressLRS_currAirRate_Modparams->FHSShopInterval == 0)
+    ++FHSSptr;
 }
 
 void UARTdisconnected()
 {
-  #if defined(GPIO_PIN_BUZZER)
-  const uint16_t beepFreq[] = {676, 520};
-  const uint16_t beepDurations[] = {300, 150};
-  for (int i = 0; i < 2; i++)
-  {
-    tone(GPIO_PIN_BUZZER, beepFreq[i], beepDurations[i]);
-    delay(beepDurations[i]);
-    noTone(GPIO_PIN_BUZZER);
-  }
-  pinMode(GPIO_PIN_BUZZER, INPUT);
-  #endif
   hwTimer.stop();
+  connectionState = noCrossfire;
 }
 
 void UARTconnected()
 {
-  #if defined(GPIO_PIN_BUZZER) && !defined(DISABLE_STARTUP_BEEP)
-  const uint16_t beepFreq[] = {520, 676};
-  const uint16_t beepDurations[] = {150, 300};
-  for (int i = 0; i < 2; i++)
-  {
-    tone(GPIO_PIN_BUZZER, beepFreq[i], beepDurations[i]);
-    delay(beepDurations[i]);
-    noTone(GPIO_PIN_BUZZER);
-  }
-  pinMode(GPIO_PIN_BUZZER, INPUT);
+  #if defined(PLATFORM_ESP32) || defined(PLATFORM_ESP8266)
+  webserverPreventAutoStart = true;
   #endif
-    delay(200);
-
+  rfModeLastChangedMS = millis(); // force syncspam on first packets
+  SetRFLinkRate(config.GetRate());
+  if (connectionState == noCrossfire || connectionState < MODE_STATES)
+  {
+    connectionState = disconnected; // set here because SetRFLinkRate may have early exited and not set the state
+  }
   hwTimer.resume();
 }
 
 static void ChangeRadioParams()
 {
-  config.SetModelId(crsf.getModelID());
-  
-  SetRFLinkRate(config.GetRate());
-  POWERMGNT.setPower((PowerLevels_e)config.GetPower());
-  SetSwitchMode(config.GetSwitchMode());
-  // TLM interval is set on the next SYNC packet
-}
+  ModelUpdatePending = false;
 
-void HandleUpdateParameter()
-{
-  if (UpdateModelReq == true)
-  {
-    ChangeRadioParams();
-    UpdateModelReq = false;
-  }
-    crsf.setLuaHiddenFlag(luaInfo.luaProperties1.id,crsf.elrsLUAmode);
-  bool updated = luaHandleUpdateParameter();
-  if (updated && config.IsModified())
-  {
-    syncSpamCounter = syncSpamAmount;
-  }
+  SetRFLinkRate(config.GetRate());
+  OtaSetSwitchMode((OtaSwitchMode_e)config.GetSwitchMode());
+  // Dynamic Power starts at MinPower and will boost if switch is set or IsArmed and disconnected
+  POWERMGNT.setPower(config.GetDynamicPower() ? MinPower : (PowerLevels_e)config.GetPower());
+  // TLM interval is set on the next SYNC packet
+#if defined(Regulatory_Domain_EU_CE_2400)
+  LBTEnabled = (config.GetPower() > PWR_10mW);
+#endif
 }
 
 void ICACHE_RAM_ATTR ModelUpdateReq()
 {
-  UpdateModelReq = true;
+  // There's a near 100% chance we started up transmitting at Model 0's
+  // rate before we got the set modelid command from the handset, so do the
+  // normal way of switching rates with syncspam first (but only if changing)
+  if (config.SetModelId(crsf.getModelID()))
+  {
+    syncSpamCounter = syncSpamAmount;
+    ModelUpdatePending = true;
+  }
 }
 
 static void ConfigChangeCommit()
 {
-  ChangeRadioParams();
-
-  // Write the uncommitted eeprom values
-  DBGLN("EEPROM COMMIT");
+  // Write the uncommitted eeprom values (may block for a while)
   config.Commit();
-  hwTimer.callbackTock = &timerCallbackNormal; // Resume the timer
-  resetLuaParams();
+  // Change params after the blocking finishes as a rate change will change the radio freq
+  ChangeRadioParams();
+  // Resume the timer, will take one hop for the radio to be on the right frequency if we missed a hop
+  hwTimer.callbackTock = &timerCallbackNormal;
+  devicesTriggerEvent();
 }
-
 
 static void CheckConfigChangePending()
 {
-  if (config.IsModified())
+  if (config.IsModified() || ModelUpdatePending)
   {
     // Keep transmitting sync packets until the spam counter runs out
     if (syncSpamCounter > 0)
       return;
 
-#if !defined(PLATFORM_STM32) && !defined(TARGET_USE_EEPROM)
+#if !defined(PLATFORM_STM32) || defined(TARGET_USE_EEPROM)
     while (busyTransmitting); // wait until no longer transmitting
-    hwTimer.callbackTock = &timerCallbackIdle;
 #else
     // The code expects to enter here shortly after the tock ISR has started sending the last
     // sync packet, before the tick ISR. Because the EEPROM write takes so long and disables
     // interrupts, FastForward the timer
-    const uint32_t EEPROM_WRITE_DURATION = 30000; // us, ~27ms is where it starts getting off by one
-    const uint32_t cycleInterval = get_elrs_airRateConfig(config.GetRate())->interval;
+    const uint32_t EEPROM_WRITE_DURATION = 30000; // us, a page write on F103C8 takes ~29.3ms
+    const uint32_t cycleInterval = ExpressLRS_currAirRate_Modparams->interval;
     // Total time needs to be at least DURATION, rounded up to next cycle
-    uint32_t pauseCycles = (EEPROM_WRITE_DURATION + cycleInterval - 1) / cycleInterval;
+    // adding one cycle that will be eaten by busywaiting for the transmit to end
+    uint32_t pauseCycles = ((EEPROM_WRITE_DURATION + cycleInterval - 1) / cycleInterval) + 1;
     // Pause won't return until paused, and has just passed the tick ISR (but not fired)
     hwTimer.pause(pauseCycles * cycleInterval);
 
@@ -802,303 +632,94 @@ static void CheckConfigChangePending()
     while (pauseCycles--)
       timerCallbackIdle();
 #endif
+    // Prevent any other RF SPI traffic during the commit from RX or scheduled TX
+    hwTimer.callbackTock = &timerCallbackIdle;
+    // If telemetry expected in the next interval, the radio was in RX mode
+    // and will skip sending the next packet when the timer resumes.
+    // Return to normal send mode because if the skipped packet happened
+    // to be on the last slot of the FHSS the skip will prevent FHSS
+    if (TelemetryRcvPhase != ttrpTransmitting)
+    {
+      Radio.SetTxIdleMode();
+      TelemetryRcvPhase = ttrpTransmitting;
+    }
     ConfigChangeCommit();
   }
 }
 
-void ICACHE_RAM_ATTR RXdoneISR()
+void ICACHE_RAM_ATTR RXdoneISR(SX12xxDriverCommon::rx_status const status)
 {
-  ProcessTLMpacket();
+  ProcessTLMpacket(status);
   busyTransmitting = false;
 }
 
 void ICACHE_RAM_ATTR TXdoneISR()
 {
-  busyTransmitting = false;
-  NonceTX++; // must be done before callback
   HandleFHSS();
-  HandleTLM();
+  HandlePrepareForTLM();
+#if defined(Regulatory_Domain_EU_CE_2400)
+  if (TelemetryRcvPhase != ttrpPreReceiveGap)
+  {
+    // Start RX for Listen Before Talk early because it takes about 100us
+    // from RX enable to valid instant RSSI values are returned.
+    // If rx was already started by TLM prepare above, this call will let RX
+    // continue as normal.
+    BeginClearChannelAssessment();
+  }
+#endif // non-CE
+  busyTransmitting = false;
 }
 
-static void UpdateConnectDisconnectStatus(const uint32_t now)
+static void UpdateConnectDisconnectStatus()
 {
   // Number of telemetry packets which can be lost in a row before going to disconnected state
   constexpr unsigned RX_LOSS_CNT = 5;
   const uint32_t tlmInterval = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
-  const uint32_t msConnectionLostTimeout = tlmInterval * ExpressLRS_currAirRate_Modparams->interval / (1000U / RX_LOSS_CNT);
-  if (LastTLMpacketRecvMillis && ((now - LastTLMpacketRecvMillis) < msConnectionLostTimeout))
+  // +2 to account for any rounding down and partial millis()
+  const uint32_t msConnectionLostTimeout = tlmInterval * ExpressLRS_currAirRate_Modparams->interval / (1000U / RX_LOSS_CNT) + 2;
+  // Capture the last before now so it will always be <= now
+  const uint32_t lastTlmMillis = LastTLMpacketRecvMillis;
+  const uint32_t now = millis();
+  if (lastTlmMillis && ((now - lastTlmMillis) <= msConnectionLostTimeout))
   {
-    connectionState = connected;
-    #if defined(GPIO_PIN_LED_RED) && (GPIO_PIN_LED_RED != UNDEF_PIN)
-    digitalWrite(GPIO_PIN_LED_RED, HIGH ^ GPIO_LED_RED_INVERTED);
-    #endif // GPIO_PIN_LED_RED
+    if (connectionState != connected)
+    {
+      connectionState = connected;
+      crsf.ForwardDevicePings = true;
+      DBGLN("got downlink conn");
+    }
   }
   else
   {
     connectionState = disconnected;
-    #if defined(GPIO_PIN_LED_RED) && (GPIO_PIN_LED_RED != UNDEF_PIN)
-    digitalWrite(GPIO_PIN_LED_RED, LOW ^ GPIO_LED_RED_INVERTED);
-    #endif // GPIO_PIN_LED_RED
+    connectionHasModelMatch = true;
+    crsf.ForwardDevicePings = false;
   }
 }
 
-void setup()
+void SetSyncSpam()
 {
-#if defined(TARGET_TX_GHOST)
-  Serial.setTx(PA2);
-  Serial.setRx(PA3);
-#endif
-  Serial.begin(460800);
-#if defined(HAS_OLED)
-  OLED.displayLogo();
-//  OLED.setCommitString(thisCommit, commitStr);
-#endif
-
-  startupLEDs();
-
-  #if defined(GPIO_PIN_LED_GREEN) && (GPIO_PIN_LED_GREEN != UNDEF_PIN)
-    pinMode(GPIO_PIN_LED_GREEN, OUTPUT);
-    digitalWrite(GPIO_PIN_LED_GREEN, HIGH ^ GPIO_LED_GREEN_INVERTED);
-  #endif // GPIO_PIN_LED_GREEN
-  #if defined(GPIO_PIN_LED_RED) && (GPIO_PIN_LED_RED != UNDEF_PIN)
-    pinMode(GPIO_PIN_LED_RED, OUTPUT);
-    digitalWrite(GPIO_PIN_LED_RED, LOW ^ GPIO_LED_RED_INVERTED);
-  #endif // GPIO_PIN_LED_RED
-
-  #if defined(GPIO_PIN_BUZZER) && (GPIO_PIN_BUZZER != UNDEF_PIN) && !defined(DISABLE_STARTUP_BEEP)
-    pinMode(GPIO_PIN_BUZZER, OUTPUT);
-    // Annoying startup beeps
-    #ifndef JUST_BEEP_ONCE
-      #if defined(MY_STARTUP_MELODY_ARR)
-        // It's silly but I couldn't help myself. See: BLHeli32 startup tones.
-        const int melody[][2] = MY_STARTUP_MELODY_ARR;
-
-        for(uint i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
-          tone(GPIO_PIN_BUZZER, melody[i][0], melody[i][1]);
-          delay(melody[i][1]);
-          noTone(GPIO_PIN_BUZZER);
-        }
-      #else
-        // use default jingle
-        const int beepFreq[] = {659, 659, 523, 659, 783, 392};
-        const int beepDurations[] = {300, 300, 100, 300, 550, 575};
-
-        for (int i = 0; i < 6; i++)
-        {
-          tone(GPIO_PIN_BUZZER, beepFreq[i], beepDurations[i]);
-          delay(beepDurations[i]);
-          noTone(GPIO_PIN_BUZZER);
-        }
-      #endif
-    #else
-      tone(GPIO_PIN_BUZZER, 400, 200);
-      delay(200);
-      tone(GPIO_PIN_BUZZER, 480, 200);
-    #endif
-  #endif // GPIO_PIN_BUZZER
-
-#if defined(GPIO_PIN_BUTTON) && (GPIO_PIN_BUTTON != UNDEF_PIN)
-  button.init(GPIO_PIN_BUTTON, !GPIO_BUTTON_INVERTED); // r9 tx appears to be active high
-#endif
-
-#if defined(TARGET_TX_FM30)
-  pinMode(GPIO_PIN_LED_RED_GREEN, OUTPUT); // Green LED on "Red" LED (off)
-  digitalWrite(GPIO_PIN_LED_RED_GREEN, HIGH);
-  pinMode(GPIO_PIN_LED_GREEN_RED, OUTPUT); // Red LED on "Green" LED (off)
-  digitalWrite(GPIO_PIN_LED_GREEN_RED, HIGH);
-  pinMode(GPIO_PIN_UART3RX_INVERT, OUTPUT); // RX3 inverter (from radio)
-  digitalWrite(GPIO_PIN_UART3RX_INVERT, LOW); // RX3 not inverted
-  pinMode(GPIO_PIN_BLUETOOTH_EN, OUTPUT); // Bluetooth enable (disabled)
-  digitalWrite(GPIO_PIN_BLUETOOTH_EN, HIGH);
-  pinMode(GPIO_PIN_UART1RX_INVERT, OUTPUT); // RX1 inverter (TX handled in CRSF)
-  digitalWrite(GPIO_PIN_UART1RX_INVERT, HIGH);
-#endif
-#if defined(TARGET_TX_FM30_MINI)
-    pinMode(GPIO_PIN_UART1TX_INVERT, OUTPUT); // TX1 inverter used for debug
-    digitalWrite(GPIO_PIN_UART1TX_INVERT, LOW);
-#endif
-
-#if defined(TARGET_TX_BETAFPV_2400_V1) || defined(TARGET_TX_BETAFPV_900_V1)
-  button.buttonTriplePress = &EnterBindingMode;
-  button.buttonLongPress = &POWERMGNT.handleCyclePower;
-#endif
-
-#ifdef PLATFORM_ESP32
-  // Get base mac address
-  esp_read_mac(baseMac, ESP_MAC_WIFI_STA);
-  // UID[0..2] are OUI (organisationally unique identifier) and are not ESP32 unique.  Do not use!
-#endif // PLATFORM_ESP32
-
-  FHSSrandomiseFHSSsequence(uidMacSeedGet());
-
-  Radio.RXdoneCallback = &RXdoneISR;
-  Radio.TXdoneCallback = &TXdoneISR;
-
-  crsf.connected = &UARTconnected; // it will auto init when it detects UART connection
-  crsf.disconnected = &UARTdisconnected;
-  crsf.RecvParameterUpdate = &luaParamUpdateReq;
-  crsf.RecvModelUpdate = &ModelUpdateReq;
-  hwTimer.callbackTock = &timerCallbackNormal;
-  DBGLN("ExpressLRS TX Module Booted...");
-
-  eeprom.Begin(); // Init the eeprom
-  config.SetStorageProvider(&eeprom); // Pass pointer to the Config class for access to storage
-  config.Load(); // Load the stored values from eeprom
-
-  Radio.currFreq = GetInitialFreq(); //set frequency first or an error will occur!!!
-  #if !defined(Regulatory_Domain_ISM_2400)
-  //Radio.currSyncWord = UID[3];
-  #endif
-  bool init_success = Radio.Begin();
-  if (!init_success)
+  // Send sync spam if a UI device has requested to and the config has changed
+  if (config.IsModified())
   {
-    #ifdef PLATFORM_ESP32
-    BeginWebUpdate();
-    while (1)
-    {
-      HandleWebUpdate();
-      delay(1);
-    }
-    #endif
-    #if defined(GPIO_PIN_LED_GREEN) && (GPIO_PIN_LED_GREEN != UNDEF_PIN)
-      digitalWrite(GPIO_PIN_LED_GREEN, LOW ^ GPIO_LED_GREEN_INVERTED);
-    #endif // GPIO_PIN_LED_GREEN
-    #if defined(GPIO_PIN_BUZZER) && (GPIO_PIN_BUZZER != UNDEF_PIN)
-      tone(GPIO_PIN_BUZZER, 480, 200);
-    #endif // GPIO_PIN_BUZZER
-    #if defined(GPIO_PIN_LED_RED) && (GPIO_PIN_LED_RED != UNDEF_PIN)
-      digitalWrite(GPIO_PIN_LED_RED, LOW ^ GPIO_LED_RED_INVERTED);
-    #endif // GPIO_PIN_LED_RED
-    delay(200);
-    #if defined(GPIO_PIN_BUZZER) && (GPIO_PIN_BUZZER != UNDEF_PIN)
-      tone(GPIO_PIN_BUZZER, 400, 200);
-    #endif // GPIO_PIN_BUZZER
-    #if defined(GPIO_PIN_LED_RED) && (GPIO_PIN_LED_RED != UNDEF_PIN)
-      digitalWrite(GPIO_PIN_LED_RED, HIGH ^ GPIO_LED_RED_INVERTED);
-    #endif // GPIO_PIN_LED_RED
-    delay(1000);
+    syncSpamCounter = syncSpamAmount;
   }
-  TelemetryReceiver.SetDataToReceive(sizeof(CRSFinBuffer), CRSFinBuffer, ELRS_TELEMETRY_BYTES_PER_CALL);
-
-  POWERMGNT.init();
-
-  // Set the pkt rate, TLM ratio, and power from the stored eeprom values
-  ChangeRadioParams();
-
-  registerLuaParameters();
-  registerLUAPopulateParams(updateLUApacketCount);
-
-  hwTimer.init();
-  //hwTimer.resume();  //uncomment to automatically start the RX timer and leave it running
-  crsf.Begin();
-  #if defined(HAS_OLED)
-    OLED.updateScreen(OLED.getPowerString((PowerLevels_e)POWERMGNT.currPower()),
-                  OLED.getRateString((expresslrs_RFrates_e)ExpressLRS_currAirRate_Modparams->enum_rate),
-                  OLED.getTLMRatioString((expresslrs_tlm_ratio_e)(ExpressLRS_currAirRate_Modparams->TLMinterval)), commitStr);
-  #endif
 }
 
-void loop()
+static void SendRxWiFiOverMSP()
 {
+  MSPDataPackage[0] = MSP_ELRS_SET_RX_WIFI_MODE;
+  MspSender.SetDataToTransmit(1, MSPDataPackage, ELRS_MSP_BYTES_PER_CALL);
+}
 
-  uint32_t now = millis();
-  static bool mspTransferActive = false;
-
-  UpdateConnectDisconnectStatus(now);
-  updateLEDs(now, connectionState, ExpressLRS_currAirRate_Modparams->index, POWERMGNT.currPower());
-
-#ifdef PLATFORM_ESP32
-  //if webupdate was requested before or AUTO_WIFI_ON_INTERVAL has been elapsed but uart is not detected
-  //start webupdate, there might be wrong configuration flashed.
-  if(crsf.hasEverConnected == false && now > (AUTO_WIFI_ON_INTERVAL*1000) && !webUpdateMode){
-    DBGLN("No CRSF ever detected, starting WiFi");
-    webUpdateMode = true;
-    BeginWebUpdate();
-  }
-  if (webUpdateMode)
+static void CheckReadyToSend()
+{
+  if (RxWiFiReadyToSend)
   {
-    HandleWebUpdate();
-    return;
-  }
-#endif
-  HandleUpdateParameter();
-  CheckConfigChangePending();
-
-  #ifdef FEATURE_OPENTX_SYNC
-    // DBGVLN(crsf.OpenTXsyncOffset);
-  #endif
-
-  #ifdef PLATFORM_STM32
-    crsf.handleUARTin();
-  #endif // PLATFORM_STM32
-
-  #if defined(GPIO_PIN_BUTTON) && (GPIO_PIN_BUTTON != UNDEF_PIN)
-    button.handle();
-  #endif
-
-  if (Serial.available())
-  {
-    uint8_t c = Serial.read();
-
-    if (msp.processReceivedByte(c))
+    RxWiFiReadyToSend = false;
+    if (!IsArmed())
     {
-      // Finished processing a complete packet
-      ProcessMSPPacket(msp.getReceivedPacket());
-      msp.markPacketReceived();
-    }
-  }
-  
-  if (VtxConfigReadyToSend)
-  {
-    VtxConfigReadyToSend = false;
-    VtxConfigToMSPOut();
-  }
-
-  /* Send TLM updates to handset if connected + reporting period
-   * is elapsed. This keeps handset happy dispite of the telemetry ratio */
-  if ((connectionState == connected) && (LastTLMpacketRecvMillis != 0) &&
-      (now >= (uint32_t)(TLM_REPORT_INTERVAL_MS + TLMpacketReported))) {
-    crsf.sendLinkStatisticsToTX();
-    TLMpacketReported = now;
-  }
-
-
-  if (TelemetryReceiver.HasFinishedData())
-  {
-      crsf.sendTelemetryToTX(CRSFinBuffer);
-      TelemetryReceiver.Unlock();
-  }
-
-  // Actual update of dynamic power is done here
-  DynamicPower_Update();
-
-  // only send msp data when binding is not active
-  if (InBindingMode)
-  {
-    // exit bind mode if package after some repeats
-    if (BindingSendCount > 6) {
-      ExitBindingMode();
-    }
-  }
-  else if (!MspSender.IsActive())
-  {
-    // sending is done and we need to update our flag
-    if (mspTransferActive)
-    {
-      // unlock buffer for msp messages
-      crsf.UnlockMspMessage();
-      mspTransferActive = false;
-    }
-    // we are not sending so look for next msp package
-    else
-    {
-      uint8_t* currentMspData = crsf.GetMspMessage();
-      // if we have a new msp package start sending
-      if (currentMspData != NULL)
-      {
-        MspSender.SetDataToTransmit(ELRS_MSP_BUFFER, currentMspData, ELRS_MSP_BYTES_PER_CALL);
-        mspTransferActive = true;
-      }
+      SendRxWiFiOverMSP();
     }
   }
 }
@@ -1111,9 +732,9 @@ void OnRFModePacket(mspPacket_t *packet)
 
   switch (rfMode)
   {
-  case RATE_200HZ:
-  case RATE_100HZ:
-  case RATE_50HZ:
+  case RATE_LORA_200HZ:
+  case RATE_LORA_100HZ:
+  case RATE_LORA_50HZ:
     SetRFLinkRate(enumRatetoIndex((expresslrs_RFrates_e)rfMode));
     break;
   default:
@@ -1151,81 +772,46 @@ void OnTLMRatePacket(mspPacket_t *packet)
   // }
 }
 
-void ProcessMSPPacket(mspPacket_t *packet)
+void OnPowerGetCalibration(mspPacket_t *packet)
 {
-  // Inspect packet for ELRS specific opcodes
-  if (packet->function == MSP_ELRS_FUNC)
-  {
-    uint8_t opcode = packet->readByte();
-
-    CHECK_PACKET_PARSING();
-
-    switch (opcode)
-    {
-    case MSP_ELRS_RF_MODE:
-      OnRFModePacket(packet);
-      break;
-    case MSP_ELRS_TX_PWR:
-      OnTxPowerPacket(packet);
-      break;
-    case MSP_ELRS_TLM_RATE:
-      OnTLMRatePacket(packet);
-      break;
-    default:
-      break;
-    }
-  }
-  else if (packet->function == MSP_SET_VTX_CONFIG)
-  {
-    if (packet->payload[0] < 48) // Standard 48 channel VTx table size e.g. A, B, E, F, R, L
-    {
-      config.SetVtxBand(packet->payload[0] / 8 + 1);
-      config.SetVtxChannel(packet->payload[0] % 8);
-    } else
-    {
-      return; // Packets containing frequency in MHz are not yet supported.
-    }
-
-    VtxConfigReadyToSend = true;
-
-    resetLuaParams();
-    sendLuaDevicePacket();
-  }
+  uint8_t index = packet->readByte();
+  UNUSED(index);
+  int8_t values[PWR_COUNT] = {0};
+  POWERMGNT.GetPowerCaliValues(values, PWR_COUNT);
+  DBGLN("power get calibration value %d",  values[index]);
 }
 
-void VtxConfigToMSPOut()
+void OnPowerSetCalibration(mspPacket_t *packet)
 {
-  // 0 = off in the lua Band field
-  // Do not send while armed.  Replace CRSF_to_BIT with IsArmed() after PR #786 is merged
-  if (!config.GetVtxBand() || CRSF_to_BIT(crsf.ChannelDataIn[AUX1]))
+  uint8_t index = packet->readByte();
+  int8_t value = packet->readByte();
+
+  if((index < 0) || (index > PWR_COUNT))
+  {
+    DBGLN("calibration error index %d out of range", index);
     return;
+  }
+  hwTimer.stop();
+  delay(20);
 
-  uint8_t vtxIdx = (config.GetVtxBand()-1) * 8 + config.GetVtxChannel();
-
-  mspPacket_t packet;
-  packet.reset();
-  packet.function = MSP_SET_VTX_CONFIG;
-  packet.addByte(vtxIdx);
-  packet.addByte(0);
-  packet.addByte(config.GetVtxPower());
-  packet.addByte(config.GetVtxPitmode());
-
-  crsf.AddMspMessage(&packet);
-
-  eepromWriteToMSPOut();
+  int8_t values[PWR_COUNT] = {0};
+  POWERMGNT.GetPowerCaliValues(values, PWR_COUNT);
+  values[index] = value;
+  POWERMGNT.SetPowerCaliValues(values, PWR_COUNT);
+  DBGLN("power calibration done %d, %d", index, value);
+  hwTimer.resume();
 }
 
-void eepromWriteToMSPOut()
-{
-  mspPacket_t packet;
-  packet.reset();
-  packet.function = MSP_EEPROM_WRITE;
-  packet.addByte(0);
-  packet.addByte(0);
-  packet.addByte(0);
-  packet.addByte(0);
 
-  crsf.AddMspMessage(&packet);
+void SendUIDOverMSP()
+{
+  MSPDataPackage[0] = MSP_ELRS_BIND;
+  MSPDataPackage[1] = MasterUID[2];
+  MSPDataPackage[2] = MasterUID[3];
+  MSPDataPackage[3] = MasterUID[4];
+  MSPDataPackage[4] = MasterUID[5];
+  BindingSendCount = 0;
+  MspSender.SetDataToTransmit(5, MSPDataPackage, ELRS_MSP_BYTES_PER_CALL);
 }
 
 void EnterBindingMode()
@@ -1251,14 +837,12 @@ void EnterBindingMode()
   UID[5] = BindingUID[5];
 
   CRCInitializer = 0;
-
-  InBindingMode = 2;
-  setLuaCommandValue(&luaBind,InBindingMode);
-  //setLuaCommandInfo(&luaBind,"in Binding Mode");
+  NonceTX = 0; // Lock the NonceTX to prevent syncspam packets
+  InBindingMode = true;
 
   // Start attempting to bind
   // Lock the RF rate and freq while binding
-  SetRFLinkRate(RATE_DEFAULT);
+  SetRFLinkRate(RATE_BINDING);
   Radio.SetFrequencyReg(GetInitialFreq());
   // Start transmitting again
   hwTimer.resume();
@@ -1284,39 +868,264 @@ void ExitBindingMode()
 
   CRCInitializer = (UID[4] << 8) | UID[5];
 
-  InBindingMode = 0;
-  setLuaCommandValue(&luaBind,InBindingMode);
-  //setLuaCommandInfo(&luaBind,"DONE");
-  MspSender.ResetState();
+  InBindingMode = false;
+
   SetRFLinkRate(config.GetRate()); //return to original rate
 
   DBGLN("Exiting binding mode");
 }
 
-void SendUIDOverMSP()
+void ProcessMSPPacket(mspPacket_t *packet)
 {
-  BindingPackage[0] = MSP_ELRS_BIND;
-  BindingPackage[1] = MasterUID[2];
-  BindingPackage[2] = MasterUID[3];
-  BindingPackage[3] = MasterUID[4];
-  BindingPackage[4] = MasterUID[5];
-  MspSender.ResetState();
-  BindingSendCount = 0;
-  MspSender.SetDataToTransmit(5, BindingPackage, ELRS_MSP_BYTES_PER_CALL);
-  InBindingMode = 2;
+  // Inspect packet for ELRS specific opcodes
+  if (packet->function == MSP_ELRS_FUNC)
+  {
+    uint8_t opcode = packet->readByte();
+
+    CHECK_PACKET_PARSING();
+
+    switch (opcode)
+    {
+    case MSP_ELRS_RF_MODE:
+      OnRFModePacket(packet);
+      break;
+    case MSP_ELRS_TX_PWR:
+      OnTxPowerPacket(packet);
+      break;
+    case MSP_ELRS_TLM_RATE:
+      OnTLMRatePacket(packet);
+      break;
+    case MSP_ELRS_POWER_CALI_GET:
+      OnPowerGetCalibration(packet);
+      break;
+    case MSP_ELRS_POWER_CALI_SET:
+      OnPowerSetCalibration(packet);
+      break;
+    default:
+      break;
+    }
+  }
+  else if (packet->function == MSP_SET_VTX_CONFIG)
+  {
+    if (packet->payload[0] < 48) // Standard 48 channel VTx table size e.g. A, B, E, F, R, L
+    {
+      config.SetVtxBand(packet->payload[0] / 8 + 1);
+      config.SetVtxChannel(packet->payload[0] % 8);
+    } else
+    {
+      return; // Packets containing frequency in MHz are not yet supported.
+    }
+
+    VtxTriggerSend();
+  }
 }
 
-
-
-#ifdef TARGET_TX_GHOST
-extern "C"
-/**
-  * @brief This function handles external line 2 interrupt request.
-  * @param  None
-  * @retval None
-  */
-void EXTI2_TSC_IRQHandler()
-{
-  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_2);
-}
+static void setupLoggingBackpack()
+{  /*
+   * Setup the logging/backpack serial port.
+   * This is always done because we need a place to send data even if there is no backpack!
+   */
+#if defined(PLATFORM_ESP32) && defined(GPIO_PIN_DEBUG_RX) && GPIO_PIN_DEBUG_RX != UNDEF_PIN && defined(GPIO_PIN_DEBUG_TX) && GPIO_PIN_DEBUG_TX != UNDEF_PIN
+  HardwareSerial *serialPort = new HardwareSerial(2);
+  serialPort->begin(BACKPACK_LOGGING_BAUD, SERIAL_8N1, GPIO_PIN_DEBUG_RX, GPIO_PIN_DEBUG_TX);
+#elif defined(PLATFORM_ESP8266) && defined(GPIO_PIN_DEBUG_TX) && GPIO_PIN_DEBUG_TX != UNDEF_PIN
+  HardwareSerial *serialPort = new HardwareSerial(0);
+  serialPort->begin(BACKPACK_LOGGING_BAUD, SERIAL_8N1, SERIAL_TX_ONLY, GPIO_PIN_DEBUG_TX);
+#elif defined(TARGET_TX_FM30)
+  USBSerial *serialPort = &SerialUSB; // No way to disable creating SerialUSB global, so use it
+  serialPort->begin();
+#elif (defined(GPIO_PIN_DEBUG_RX) && GPIO_PIN_DEBUG_RX != UNDEF_PIN) || (defined(GPIO_PIN_DEBUG_TX) && GPIO_PIN_DEBUG_TX != UNDEF_PIN)
+  HardwareSerial *serialPort = new HardwareSerial(2);
+  #if defined(GPIO_PIN_DEBUG_RX) && GPIO_PIN_DEBUG_RX != UNDEF_PIN
+    serialPort->setRx(GPIO_PIN_DEBUG_RX);
+  #endif
+  #if defined(GPIO_PIN_DEBUG_TX) && GPIO_PIN_DEBUG_TX != UNDEF_PIN
+    serialPort->setTx(GPIO_PIN_DEBUG_TX);
+  #endif
+  serialPort->begin(BACKPACK_LOGGING_BAUD);
+#else
+  Stream *serialPort = new NullStream();
 #endif
+  LoggingBackpack = serialPort;
+}
+
+/**
+ * Target-specific initialization code called early in setup()
+ * Setup GPIOs or other hardware, config not yet loaded
+ ***/
+static void setupTarget()
+{
+#if defined(TARGET_TX_FM30)
+  pinMode(GPIO_PIN_UART3RX_INVERT, OUTPUT); // RX3 inverter (from radio)
+  digitalWrite(GPIO_PIN_UART3RX_INVERT, LOW); // RX3 not inverted
+  pinMode(GPIO_PIN_BLUETOOTH_EN, OUTPUT); // Bluetooth enable (disabled)
+  digitalWrite(GPIO_PIN_BLUETOOTH_EN, HIGH);
+  pinMode(GPIO_PIN_UART1RX_INVERT, OUTPUT); // RX1 inverter (TX handled in CRSF)
+  digitalWrite(GPIO_PIN_UART1RX_INVERT, HIGH);
+  pinMode(GPIO_PIN_ANT_CTRL, OUTPUT);
+  digitalWrite(GPIO_PIN_ANT_CTRL, LOW); // LEFT antenna
+  HardwareSerial *uart2 = new HardwareSerial(USART2);
+  uart2->begin(57600);
+  CRSF::PortSecondary = uart2;
+#endif
+
+#if defined(TARGET_TX_FM30_MINI)
+  pinMode(GPIO_PIN_UART1TX_INVERT, OUTPUT); // TX1 inverter used for debug
+  digitalWrite(GPIO_PIN_UART1TX_INVERT, LOW);
+  pinMode(GPIO_PIN_ANT_CTRL, OUTPUT);
+  digitalWrite(GPIO_PIN_ANT_CTRL, LOW); // LEFT antenna
+#endif
+
+  setupTargetCommon();
+  setupLoggingBackpack();
+}
+
+void setup()
+{
+  setupTarget();
+  // Register the devices with the framework
+  devicesRegister(ui_devices, ARRAY_SIZE(ui_devices));
+  // Initialise the devices
+  devicesInit();
+
+  FHSSrandomiseFHSSsequence(uidMacSeedGet());
+
+  Radio.RXdoneCallback = &RXdoneISR;
+  Radio.TXdoneCallback = &TXdoneISR;
+
+  crsf.connected = &UARTconnected; // it will auto init when it detects UART connection
+  crsf.disconnected = &UARTdisconnected;
+  crsf.RecvModelUpdate = &ModelUpdateReq;
+  hwTimer.callbackTock = &timerCallbackNormal;
+  DBGLN("ExpressLRS TX Module Booted...");
+
+  eeprom.Begin(); // Init the eeprom
+  config.SetStorageProvider(&eeprom); // Pass pointer to the Config class for access to storage
+  config.Load(); // Load the stored values from eeprom
+
+  Radio.currFreq = GetInitialFreq(); //set frequency first or an error will occur!!!
+  #if defined(RADIO_SX127X)
+  //Radio.currSyncWord = UID[3];
+  #endif
+  bool init_success = Radio.Begin();
+
+  #if defined(USE_BLE_JOYSTICK)
+    init_success = true; // No radio is attached with a joystick only module.  So we are going to fake success so that crsf, hwTimer etc are initiated below.
+  #endif
+
+  if (!init_success)
+  {
+    connectionState = radioFailed;
+  }
+  else
+  {
+    TelemetryReceiver.SetDataToReceive(sizeof(CRSFinBuffer), CRSFinBuffer, ELRS_TELEMETRY_BYTES_PER_CALL);
+
+    POWERMGNT.init();
+
+    // Set the pkt rate, TLM ratio, and power from the stored eeprom values
+    ChangeRadioParams();
+
+#if defined(Regulatory_Domain_EU_CE_2400)
+    BeginClearChannelAssessment();
+#endif
+    hwTimer.init();
+    connectionState = noCrossfire;
+  }
+
+  devicesStart();
+}
+
+void loop()
+{
+  uint32_t now = millis();
+
+  #if defined(USE_BLE_JOYSTICK)
+  if (connectionState != bleJoystick && connectionState != noCrossfire) // Wait until the correct crsf baud has been found
+  {
+      connectionState = bleJoystick;
+  }
+  #endif
+
+  if (connectionState < MODE_STATES)
+  {
+    UpdateConnectDisconnectStatus();
+  }
+
+  // Update UI devices
+  devicesUpdate(now);
+
+  #if defined(PLATFORM_ESP8266) || defined(PLATFORM_ESP32)
+    // If the reboot time is set and the current time is past the reboot time then reboot.
+    if (rebootTime != 0 && now > rebootTime) {
+      ESP.restart();
+    }
+  #endif
+
+  if (connectionState > MODE_STATES)
+  {
+    return;
+  }
+
+  CheckReadyToSend();
+  CheckConfigChangePending();
+  DynamicPower_Update();
+  VtxPitmodeSwitchUpdate();
+
+  if (LoggingBackpack->available())
+  {
+    if (msp.processReceivedByte(LoggingBackpack->read()))
+    {
+      // Finished processing a complete packet
+      ProcessMSPPacket(msp.getReceivedPacket());
+      msp.markPacketReceived();
+    }
+  }
+
+  /* Send TLM updates to handset if connected + reporting period
+   * is elapsed. This keeps handset happy dispite of the telemetry ratio */
+  if ((connectionState == connected) && (LastTLMpacketRecvMillis != 0) &&
+      (now >= (uint32_t)(TLM_REPORT_INTERVAL_MS + TLMpacketReported))) {
+    crsf.sendLinkStatisticsToTX();
+    TLMpacketReported = now;
+  }
+
+  if (TelemetryReceiver.HasFinishedData())
+  {
+      crsf.sendTelemetryToTX(CRSFinBuffer);
+      TelemetryReceiver.Unlock();
+  }
+
+  // only send msp data when binding is not active
+  static bool mspTransferActive = false;
+  if (InBindingMode)
+  {
+    // exit bind mode if package after some repeats
+    if (BindingSendCount > 6) {
+      ExitBindingMode();
+    }
+  }
+  else if (!MspSender.IsActive())
+  {
+    // sending is done and we need to update our flag
+    if (mspTransferActive)
+    {
+      // unlock buffer for msp messages
+      crsf.UnlockMspMessage();
+      mspTransferActive = false;
+    }
+    // we are not sending so look for next msp package
+    else
+    {
+      uint8_t* mspData;
+      uint8_t mspLen;
+      crsf.GetMspMessage(&mspData, &mspLen);
+      // if we have a new msp package start sending
+      if (mspData != nullptr)
+      {
+        MspSender.SetDataToTransmit(mspLen, mspData, ELRS_MSP_BYTES_PER_CALL);
+        mspTransferActive = true;
+      }
+    }
+  }
+}

@@ -24,11 +24,6 @@ Modified and adapted by Alessandro Carcione for ELRS project
 
 SX1280Hal *SX1280Hal::instance = NULL;
 
-void ICACHE_RAM_ATTR SX1280Hal::nullCallback(void) {}
-
-void (*SX1280Hal::TXdoneCallback)() = &nullCallback;
-void (*SX1280Hal::RXdoneCallback)() = &nullCallback;
-
 SX1280Hal::SX1280Hal()
 {
     instance = this;
@@ -36,8 +31,10 @@ SX1280Hal::SX1280Hal()
 
 void SX1280Hal::end()
 {
-    SPI.end();
+    TXRXdisable(); // make sure the RX/TX amp pins are disabled
     detachInterrupt(GPIO_PIN_DIO1);
+    SPI.end();
+    IsrCallback = nullptr; // remove callbacks
 }
 
 void SX1280Hal::init()
@@ -47,12 +44,11 @@ void SX1280Hal::init()
     pinMode(GPIO_PIN_BUSY, INPUT);
 #endif
     pinMode(GPIO_PIN_DIO1, INPUT);
-    pinMode(GPIO_PIN_RST, OUTPUT);
     pinMode(GPIO_PIN_NSS, OUTPUT);
     digitalWrite(GPIO_PIN_NSS, HIGH);
 
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
-    DBGLN("Use PA ctrl pin: %d", GPIO_PIN_PA_ENABLE);
+    DBGLN("Use PA enable pin: %d", GPIO_PIN_PA_ENABLE);
     pinMode(GPIO_PIN_PA_ENABLE, OUTPUT);
     digitalWrite(GPIO_PIN_PA_ENABLE, LOW);
 #endif
@@ -89,17 +85,13 @@ void SX1280Hal::init()
     SPI.begin(GPIO_PIN_SCK, GPIO_PIN_MISO, GPIO_PIN_MOSI, -1); // sck, miso, mosi, ss (ss can be any GPIO)
     gpio_pullup_en((gpio_num_t)GPIO_PIN_MISO);
     SPI.setFrequency(10000000);
-#endif
-
-#ifdef PLATFORM_ESP8266
+#elif defined(PLATFORM_ESP8266)
     DBGLN("PLATFORM_ESP8266");
     SPI.begin();
     SPI.setBitOrder(MSBFIRST);
     SPI.setDataMode(SPI_MODE0);
     SPI.setFrequency(10000000);
-#endif
-
-#ifdef PLATFORM_STM32
+#elif defined(PLATFORM_STM32)
     DBGLN("Config SPI");
     SPI.setMOSI(GPIO_PIN_MOSI);
     SPI.setMISO(GPIO_PIN_MISO);
@@ -117,10 +109,15 @@ void SX1280Hal::init()
 void SX1280Hal::reset(void)
 {
     DBGLN("SX1280 Reset");
+
+#if defined(GPIO_PIN_RST) && (GPIO_PIN_RST != UNDEF_PIN)
+    pinMode(GPIO_PIN_RST, OUTPUT);
+
     delay(50);
     digitalWrite(GPIO_PIN_RST, LOW);
     delay(50);
     digitalWrite(GPIO_PIN_RST, HIGH);
+#endif
 
 #if defined(GPIO_PIN_BUSY) && (GPIO_PIN_BUSY != UNDEF_PIN)
     while (digitalRead(GPIO_PIN_BUSY) == HIGH) // wait for busy
@@ -338,25 +335,14 @@ bool ICACHE_RAM_ATTR SX1280Hal::WaitOnBusy()
 
 void ICACHE_RAM_ATTR SX1280Hal::dioISR()
 {
-    if (instance->InterruptAssignment == SX1280_INTERRUPT_RX_DONE)
-    {
-        RXdoneCallback();
-    }
-    else if (instance->InterruptAssignment == SX1280_INTERRUPT_TX_DONE)
-    {
-        TXdoneCallback();
-    }
+    if (instance->IsrCallback)
+        instance->IsrCallback();
 }
 
 void ICACHE_RAM_ATTR SX1280Hal::TXenable()
 {
-    instance->InterruptAssignment = SX1280_INTERRUPT_TX_DONE;
-
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_PA_ENABLE, HIGH);
-#endif
-#if defined(GPIO_PIN_PA_SE2622L_ENABLE) && (GPIO_PIN_PA_SE2622L_ENABLE != UNDEF_PIN)
-    digitalWrite(GPIO_PIN_PA_SE2622L_ENABLE, HIGH);
 #endif
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_RX_ENABLE, LOW);
@@ -364,21 +350,18 @@ void ICACHE_RAM_ATTR SX1280Hal::TXenable()
 #if defined(GPIO_PIN_TX_ENABLE) && (GPIO_PIN_TX_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_TX_ENABLE, HIGH);
 #endif
-#if defined(TARGET_TX_GHOST_LITE)
+#if defined(GPIO_PIN_ANT_CTRL_1) && (GPIO_PIN_ANT_CTRL_1 != UNDEF_PIN)
     digitalWrite(GPIO_PIN_ANT_CTRL_1, HIGH);
+#endif
+#if defined(GPIO_PIN_ANT_CTRL_2) && (GPIO_PIN_ANT_CTRL_2 != UNDEF_PIN)
     digitalWrite(GPIO_PIN_ANT_CTRL_2, LOW);
 #endif
 }
 
 void ICACHE_RAM_ATTR SX1280Hal::RXenable()
 {
-    instance->InterruptAssignment = SX1280_INTERRUPT_RX_DONE;
-
 #if defined(GPIO_PIN_PA_ENABLE) && (GPIO_PIN_PA_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_PA_ENABLE, HIGH);
-#endif
-#if defined(GPIO_PIN_PA_SE2622L_ENABLE) && (GPIO_PIN_PA_SE2622L_ENABLE != UNDEF_PIN)
-    digitalWrite(GPIO_PIN_PA_SE2622L_ENABLE, HIGH);
 #endif
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_RX_ENABLE, HIGH);
@@ -386,16 +369,16 @@ void ICACHE_RAM_ATTR SX1280Hal::RXenable()
 #if defined(GPIO_PIN_TX_ENABLE) && (GPIO_PIN_TX_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_TX_ENABLE, LOW);
 #endif
-#if defined(TARGET_TX_GHOST_LITE)
+#if defined(GPIO_PIN_ANT_CTRL_1) && (GPIO_PIN_ANT_CTRL_1 != UNDEF_PIN)
     digitalWrite(GPIO_PIN_ANT_CTRL_1, LOW);
+#endif
+#if defined(GPIO_PIN_ANT_CTRL_2) && (GPIO_PIN_ANT_CTRL_2 != UNDEF_PIN)
     digitalWrite(GPIO_PIN_ANT_CTRL_2, HIGH);
 #endif
 }
 
 void ICACHE_RAM_ATTR SX1280Hal::TXRXdisable()
 {
-    this->InterruptAssignment = SX1280_INTERRUPT_NONE;
-
 #if defined(GPIO_PIN_RX_ENABLE) && (GPIO_PIN_RX_ENABLE != UNDEF_PIN)
     digitalWrite(GPIO_PIN_RX_ENABLE, LOW);
 #endif

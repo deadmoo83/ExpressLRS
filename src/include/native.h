@@ -5,10 +5,14 @@
 #include <cstdint>
 #include <cstring>
 #include <cctype>
+#include <algorithm>
+
 #include <stdio.h>
 #include <unistd.h>
 #include <math.h>
 #include <sys/time.h>
+
+#define RADIO_SX128X 1
 
 typedef uint8_t byte;
 
@@ -42,6 +46,7 @@ public:
     void end() {}
     void begin(int baud) {}
     void enableHalfDuplexRx() {}
+    int availableForWrite() {return 256;}
 
     // Print methods
     size_t write(uint8_t c) {return 1;}
@@ -75,8 +80,10 @@ inline void delay(int32_t time) {
 inline unsigned long millis() { return 0; }
 inline void delayMicroseconds(int delay) { }
 
+const char device_name[] = "testing";
+const uint8_t device_name_size = sizeof(device_name);
+
 #ifdef _WIN32
 #define random rand
 #define srandom srand
 #endif
-

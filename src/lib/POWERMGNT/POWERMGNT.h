@@ -1,75 +1,34 @@
 #pragma once
 
-#include "Arduino.h"
-#include "targets.h"
-#include "DAC.h"
-
-#if defined(Regulatory_Domain_AU_915) || defined(Regulatory_Domain_EU_868) || defined(Regulatory_Domain_IN_866) || defined(Regulatory_Domain_FCC_915) || defined(Regulatory_Domain_AU_433) || defined(Regulatory_Domain_EU_433)
-#include "SX127xDriver.h"
-#elif Regulatory_Domain_ISM_2400
-#include "SX1280Driver.h"
+#if defined(PLATFORM_ESP32)
+#include <nvs_flash.h>
+#include <nvs.h>
 #endif
 
-#if defined(TARGET_1000mW_MODULE) || \
-    defined(TARGET_R9M_TX)        || \
-    defined(TARGET_TX_ES915TX)    || \
-    defined(TARGET_ES900TX)
-#if defined(UNLOCK_HIGHER_POWER) || defined(TARGET_NAMIMNORC_TX)
-#define MaxPower PWR_1000mW
-#else
-#define MaxPower PWR_250mW
-#endif
-#define DefaultPowerEnum PWR_50mW
-
-#elif defined(TARGET_R9M_LITE_PRO_TX)
-#define MaxPower PWR_1000mW
-#define DefaultPowerEnum PWR_50mW
-
-#elif defined(TARGET_TX_BETAFPV_900_V1)
-#define MaxPower PWR_500mW
-#define DefaultPowerEnum PWR_100mW
-
-#elif defined(TARGET_TX_BETAFPV_2400_V1)
-#define MaxPower PWR_500mW
-#define DefaultPowerEnum PWR_50mW
-
-#elif defined(TARGET_RX_BETAFPV_2400_V1)
-#define MaxPower PWR_100mW
-#define DefaultPowerEnum PWR_100mW
-
-#elif defined(TARGET_TX_ESP32_E28_SX1280_V1) || \
-      defined(TARGET_TX_ESP32_LORA1280F27)   || \
-      defined(TARGET_TX_GHOST)
-#define MaxPower PWR_250mW
-#define DefaultPowerEnum PWR_50mW
-
-#elif defined(TARGET_TX_ESP32_SX1280_V1)
-#define MaxPower PWR_10mW // Output is actually 14mW
-#define DefaultPowerEnum PWR_10mW
-
-#elif defined(TARGET_TX_FM30) || \
-      defined(TARGET_RX_FM30_MINI) || \
-      defined(TARGET_TX_FM30_MINI)
-#if defined(UNLOCK_HIGHER_POWER)
-#define MaxPower PWR_250mW
-#else
-#define MaxPower PWR_100mW
-#endif
-#define DefaultPowerEnum PWR_50mW
-
-#else
-// Default is "100mW module"
-//  ==> average ouput is 50mW with high duty cycle
-#define MaxPower PWR_50mW
-#define DefaultPowerEnum PWR_50mW
-#ifndef TARGET_100mW_MODULE
-#define TARGET_100mW_MODULE 1
-#endif
+#if defined(HighPower) && !defined(UNLOCK_HIGHER_POWER)
+    #undef MaxPower
+    #define MaxPower HighPower
 #endif
 
-#if !defined(MaxPower) && defined(TARGET_RX)
-#define MaxPower PWR_2000mW
-#define DefaultPowerEnum PWR_2000mW
+#ifndef POWER_OUTPUT_VALUES
+    // These are "fake" values as the power on the RX is not user selectable
+    #define MinPower PWR_10mW
+    #define MaxPower PWR_10mW
+#endif
+
+
+#if !defined(DefaultPower)
+    #define DefaultPower PWR_50mW
+#endif
+
+#if defined(Regulatory_Domain_EU_CE_2400)
+    #undef MaxPower
+    #define MaxPower PWR_100mW
+
+    #if defined(HighPower)
+        #undef HighPower
+        #define HighPower MaxPower
+    #endif
 #endif
 
 typedef enum
@@ -85,23 +44,45 @@ typedef enum
     PWR_COUNT = 8
 } PowerLevels_e;
 
-class POWERMGNT
+class PowerLevelContainer
+{
+protected:
+    static PowerLevels_e CurrentPower;
+public:
+    static PowerLevels_e currPower() { return CurrentPower; }
+};
+
+#ifndef UNIT_TEST
+
+class POWERMGNT : public PowerLevelContainer
 {
 
 private:
-    static PowerLevels_e CurrentPower;
+    static int8_t CurrentSX1280Power;
+    static PowerLevels_e FanEnableThreshold;
+    static void updateFan();
+#if defined(PLATFORM_ESP32)
+    static nvs_handle  handle;
+#endif
+    static void LoadCalibration();
 
 public:
-    static PowerLevels_e setPower(PowerLevels_e Power);
+    static void setPower(PowerLevels_e Power);
     static PowerLevels_e incPower();
     static PowerLevels_e decPower();
-    static PowerLevels_e currPower();
-    static uint8_t powerToCrsfPower(PowerLevels_e Power);
+    static void incSX1280Ouput();
+    static void decSX1280Ouput();
+    static int8_t currentSX1280Ouput();
+    static PowerLevels_e getDefaultPower();
+    static uint8_t getPowerIndBm();
     static void setDefaultPower();
     static void init();
-    static void powerLedInit();
-    static void powerLedUpdate();
-    #if defined(TARGET_TX_BETAFPV_2400_V1) || defined(TARGET_TX_BETAFPV_900_V1)
-        static void handleCyclePower();
-    #endif
+    static void SetPowerCaliValues(int8_t *values, size_t size);
+    static void GetPowerCaliValues(int8_t *values, size_t size);
 };
+
+
+#define CALIBRATION_MAGIC    0x43414C << 8   //['C', 'A', 'L']
+#define CALIBRATION_VERSION   1
+
+#endif /* !UNIT_TEST */
